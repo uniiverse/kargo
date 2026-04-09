@@ -11,6 +11,7 @@ export interface GetConfigResponse {
   argocdShards?: GetConfigResponseArgocdShards;
   hasAnalysisRunLogsUrlTemplate?: boolean;
   kargoNamespace?: string;
+  projectLabelPrefixes?: string[];
   secretManagementEnabled?: boolean;
   sharedResourcesNamespace?: string;
   systemResourcesNamespace?: string;

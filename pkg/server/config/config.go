@@ -43,6 +43,7 @@ type ServerConfig struct {
 	// know which controller's liveness to associate with such Stages. The default
 	// controller is often unnamed, so an empty string is a valid value.
 	DefaultControllerName string
+	ProjectLabelPrefixes  []string
 	RestConfig            *rest.Config
 
 	// AdditionalHandlers is a map of path patterns to HTTP handlers that will
@@ -107,7 +108,24 @@ func ServerConfigFromEnv() ServerConfig {
 	)
 	cfg.KargoNamespace = os.GetEnv("KARGO_NAMESPACE", "kargo")
 	cfg.DefaultControllerName = os.GetEnv("DEFAULT_CONTROLLER_NAME", "")
+	cfg.ProjectLabelPrefixes = parseProjectLabelPrefixes(
+		os.GetEnv("PROJECT_LABEL_PREFIXES", ""),
+	)
 	return cfg
+}
+
+func parseProjectLabelPrefixes(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var prefixes []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			prefixes = append(prefixes, p)
+		}
+	}
+	return prefixes
 }
 
 type TLSConfig struct {

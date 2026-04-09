@@ -5,7 +5,10 @@ import { Empty, Flex, Pagination, Space, Tag, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { LoadingState } from '@ui/features/common';
-import { listProjects } from '@ui/gen/api/service/v1alpha1/service-KargoService_connectquery';
+import {
+  getConfig,
+  listProjects
+} from '@ui/gen/api/service/v1alpha1/service-KargoService_connectquery';
 
 import { useLocalStorage } from '../../../utils/use-local-storage';
 
@@ -28,6 +31,9 @@ export const ProjectsList = () => {
   const [myProjectsView, setMyProjectsView] = useLocalStorage('my-projects-view', false);
 
   const [starred, toggleStar] = useStarProjects();
+
+  const { data: configData } = useQuery(getConfig);
+  const projectLabelPrefixes = configData?.projectLabelPrefixes ?? [];
 
   const { data, isLoading } = useQuery(listProjects, {
     pageSize: pageSize,
@@ -134,6 +140,7 @@ export const ProjectsList = () => {
             project={proj}
             starred={starred.includes(proj?.metadata?.uid || '')}
             onToggleStar={(id) => toggleStar(id)}
+            projectLabelPrefixes={projectLabelPrefixes}
           />
         ))}
       </div>

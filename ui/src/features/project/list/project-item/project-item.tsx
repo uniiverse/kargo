@@ -1,27 +1,35 @@
 import { faHeart, faStar } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { Button, Divider, Flex, theme, Typography } from 'antd';
+import { Button, Divider, Flex, Tag, theme, Typography } from 'antd';
 import { Link, generatePath } from 'react-router-dom';
 
 import { paths } from '@ui/config/paths';
 import { DESCRIPTION_ANNOTATION_KEY } from '@ui/features/common/utils';
 import { Project } from '@ui/gen/api/v1alpha1/generated_pb';
 
+import { filterLabelsByPrefixes } from './label-utils';
 import * as styles from './project-item.module.less';
 
 export const ProjectItem = ({
   project,
   starred,
-  onToggleStar
+  onToggleStar,
+  projectLabelPrefixes
 }: {
   project?: Project;
   starred: boolean;
   onToggleStar: (id: string) => void;
+  projectLabelPrefixes: string[];
 }) => {
   const stagesStats = project?.status?.stats?.stages;
   const warehousesStats = project?.status?.stats?.warehouses;
   const { token } = theme.useToken();
   const primaryColor = token.colorPrimary;
+
+  const labels = filterLabelsByPrefixes(
+    project?.metadata?.labels ?? {},
+    projectLabelPrefixes
+  );
 
   return (
     <Link
@@ -53,6 +61,15 @@ export const ProjectItem = ({
           }}
         />
       </Flex>
+      {labels.length > 0 && (
+        <Flex wrap gap={4} className='mt-2'>
+          {labels.map(({ key, value }) => (
+            <Tag key={key} className='!mr-0'>
+              {value ? `${key}: ${value}` : key}
+            </Tag>
+          ))}
+        </Flex>
+      )}
       <Divider className='my-3' />
       <Flex vertical gap={4}>
         <div>

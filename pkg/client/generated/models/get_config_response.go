@@ -26,6 +26,9 @@ type GetConfigResponse struct {
 	// kargo namespace
 	KargoNamespace string `json:"kargoNamespace,omitempty"`
 
+	// project label prefixes
+	ProjectLabelPrefixes []string `json:"projectLabelPrefixes"`
+
 	// secret management enabled
 	SecretManagementEnabled bool `json:"secretManagementEnabled,omitempty"`
 
