@@ -633,6 +633,7 @@ Stability is not guaranteed.
 | secret_management_enabled | bool |  secret_management_enabled indicates if secret management features are available. |
 | system_resources_namespace | string |  system_resources_namespace is the namespace used for "cluster-scoped" system secrets. |
 | has_analysis_run_logs_url_template | bool |  has_analysis_run_logs_url_template indicates if an analysis run logs URL template is configured. |
+| project_label_prefixes | string |  project_label_prefixes is the list of label key prefixes displayed on project cards in the dashboard. The matching prefix is stripped before display. |
 
 
 ### GetConfigResponse.ArgocdShardsEntry {#akuity-io-kargo-service-v1alpha1-GetConfigResponse-ArgocdShardsEntry}

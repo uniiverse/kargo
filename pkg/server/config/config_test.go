@@ -6,6 +6,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseProjectLabelPrefixes(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "single prefix",
+			input:    "universe.engineer/",
+			expected: []string{"universe.engineer/"},
+		},
+		{
+			name:     "multiple prefixes",
+			input:    "universe.engineer/,team.example.com/",
+			expected: []string{"universe.engineer/", "team.example.com/"},
+		},
+		{
+			name:     "trims whitespace and skips empty entries",
+			input:    " universe.engineer/ , , team.example.com/ ",
+			expected: []string{"universe.engineer/", "team.example.com/"},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := parseProjectLabelPrefixes(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 func TestDecodeArgoCDURLs(t *testing.T) {
 
 	testCases := []struct {

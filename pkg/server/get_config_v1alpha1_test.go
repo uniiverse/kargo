@@ -34,6 +34,19 @@ func TestGetConfig(t *testing.T) {
 				require.Equal(t, "https://argocd.example.com", res.ArgocdShards[""].Url)
 			},
 		},
+		"get config with project label prefixes": {
+			req: &svcv1alpha1.GetConfigRequest{},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"universe.engineer/", "team.example.com/"},
+			},
+			assertions: func(res *svcv1alpha1.GetConfigResponse) {
+				require.Equal(
+					t,
+					[]string{"universe.engineer/", "team.example.com/"},
+					res.ProjectLabelPrefixes,
+				)
+			},
+		},
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
@@ -54,6 +67,7 @@ func Test_server_getConfig(t *testing.T) {
 	testRESTEndpoint(
 		t, &config.ServerConfig{
 			SecretManagementEnabled: true,
+			ProjectLabelPrefixes:   []string{"universe.engineer/"},
 			ArgoCDConfig: config.ArgoCDConfig{
 				URLs: map[string]string{
 					"": "https://argocd.example.com",
@@ -72,6 +86,11 @@ func Test_server_getConfig(t *testing.T) {
 					err := json.Unmarshal(w.Body.Bytes(), res)
 					require.NoError(t, err)
 					require.True(t, res.SecretManagementEnabled)
+					require.Equal(
+						t,
+						[]string{"universe.engineer/"},
+						res.ProjectLabelPrefixes,
+					)
 				},
 			},
 		},

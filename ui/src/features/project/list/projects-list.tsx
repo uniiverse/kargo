@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 
 import { LoadingState } from '@ui/features/common';
 import { useListProjects } from '@ui/gen/api/v2/core/core';
+import { useGetConfig } from '@ui/gen/api/v2/system/system';
 
 import { useLocalStorage } from '../../../utils/use-local-storage';
 
@@ -27,6 +28,9 @@ export const ProjectsList = () => {
   const [myProjectsView, setMyProjectsView] = useLocalStorage('my-projects-view', false);
 
   const [starred, toggleStar] = useStarProjects();
+
+  const { data: configData } = useGetConfig();
+  const projectLabelPrefixes = configData?.data?.projectLabelPrefixes ?? [];
 
   const { data, isLoading } = useListProjects({
     pageSize,
@@ -136,6 +140,7 @@ export const ProjectsList = () => {
             project={proj}
             starred={starred.includes(proj?.metadata?.uid || '')}
             onToggleStar={(id) => toggleStar(id)}
+            projectLabelPrefixes={projectLabelPrefixes}
           />
         ))}
       </div>
