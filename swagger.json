@@ -4790,6 +4790,12 @@
         "kargoNamespace": {
           "type": "string"
         },
+        "projectLabelPrefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "secretManagementEnabled": {
           "type": "boolean"
         },

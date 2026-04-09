@@ -25,6 +25,9 @@ data:
   SYSTEM_RESOURCES_NAMESPACE: {{ quote .Values.global.systemResources.namespace }}
   SHARED_RESOURCES_NAMESPACE: {{ quote .Values.global.sharedResources.namespace }}
   PERMISSIVE_CORS_POLICY_ENABLED: {{ quote .Values.api.permissiveCORSPolicyEnabled }}
+  {{- if .Values.api.projectLabelPrefixes }}
+  PROJECT_LABEL_PREFIXES: {{ join "," .Values.api.projectLabelPrefixes }}
+  {{- end }}
   {{- if .Values.api.adminAccount.enabled }}
   ADMIN_ACCOUNT_ENABLED: "true"
   ADMIN_ACCOUNT_TOKEN_ISSUER: {{ include "kargo.api.baseURL" . }}
