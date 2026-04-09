@@ -20,6 +20,7 @@ func (s *server) GetConfig(
 		SecretManagementEnabled:       s.cfg.SecretManagementEnabled,
 		SystemResourcesNamespace:      s.cfg.SystemResourcesNamespace,
 		HasAnalysisRunLogsUrlTemplate: s.cfg.AnalysisRunLogURLTemplate != "",
+		ProjectLabelPrefixes:          s.cfg.ProjectLabelPrefixes,
 	}
 	for shardName, url := range s.cfg.ArgoCDConfig.URLs {
 		resp.ArgocdShards[shardName] = &svcv1alpha1.ArgoCDShard{
@@ -39,6 +40,7 @@ type getConfigResponse struct {
 	SharedResourcesNamespace      string                  `json:"sharedResourcesNamespace"`
 	KargoNamespace                string                  `json:"kargoNamespace"`
 	HasAnalysisRunLogsUrlTemplate bool                    `json:"hasAnalysisRunLogsUrlTemplate"`
+	ProjectLabelPrefixes          []string                `json:"projectLabelPrefixes"`
 } // @name GetConfigResponse
 
 // ArgoCDShard represents Argo CD shard configuration
@@ -64,6 +66,7 @@ func (s *server) getConfig(c *gin.Context) {
 		SharedResourcesNamespace:      s.cfg.SharedResourcesNamespace,
 		KargoNamespace:                s.cfg.KargoNamespace,
 		HasAnalysisRunLogsUrlTemplate: s.cfg.AnalysisRunLogURLTemplate != "",
+		ProjectLabelPrefixes:          s.cfg.ProjectLabelPrefixes,
 	}
 	for shardName, url := range s.cfg.ArgoCDConfig.URLs {
 		resp.ArgocdShards[shardName] = &argoCDShard{
