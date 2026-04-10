@@ -117,7 +117,7 @@ func ServerConfigFromEnv() ServerConfig {
 	cfg.DefaultControllerName = os.GetEnv("DEFAULT_CONTROLLER_NAME", "")
 	cfg.BasePath = NormalizeBasePath(os.GetEnv("API_BASE_PATH", ""))
 	cfg.ProjectLabelPrefixes = parseProjectLabelPrefixes(
-		os.GetEnv("PROJECT_LABEL_PREFIXES", ""),
+		os.GetEnv("PROJECT_LABEL_PREFIXES", "universe.engineer/"),
 	)
 	return cfg
 }
