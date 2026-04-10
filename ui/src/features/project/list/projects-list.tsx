@@ -1,8 +1,8 @@
 import { useQuery } from '@connectrpc/connect-query';
 import { faStar, faUser } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { Button, Empty, Flex, Pagination, Space } from 'antd';
-import { useEffect, useState } from 'react';
+import { Button, Empty, Flex, Pagination, Select, Space } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 
 import { LoadingState } from '@ui/features/common';
 import {
@@ -12,6 +12,7 @@ import {
 
 import { useLocalStorage } from '../../../utils/use-local-storage';
 
+import { collectUniqueLabels, matchesSelectedLabels } from './project-item/label-utils';
 import { ProjectItem } from './project-item/project-item';
 import { ProjectListFilter } from './project-list-filter';
 import * as styles from './projects-list.module.less';
@@ -34,6 +35,7 @@ export const ProjectsList = () => {
 
   const { data: configData } = useQuery(getConfig);
   const projectLabelPrefixes = configData?.projectLabelPrefixes ?? [];
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
 
   const { data, isLoading } = useQuery(listProjects, {
     pageSize: pageSize,
@@ -59,49 +61,43 @@ export const ProjectsList = () => {
     setPage(1);
   };
 
+  const availableLabels = useMemo(
+    () =>
+      collectUniqueLabels(
+        (data?.projects ?? []).map((p) => p.metadata?.labels ?? {}),
+        projectLabelPrefixes
+      ),
+    [data?.projects, projectLabelPrefixes]
+  );
+
+  const filteredProjects = useMemo(
+    () =>
+      (data?.projects ?? []).filter((p) =>
+        matchesSelectedLabels(p.metadata?.labels ?? {}, projectLabelPrefixes, selectedLabels)
+      ),
+    [data?.projects, projectLabelPrefixes, selectedLabels]
+  );
+
   if (isLoading) return <LoadingState />;
 
-  const isEmpty = !data || data.projects.length === 0;
-
-  if (isEmpty) {
-    return (
-      <>
-        <Flex align='center' className='mb-20' gap={8}>
-          <ProjectListFilter onChange={handleFilterChange} init={filter} />
-          <Space className='ml-auto'>
-            <Button
-              variant='outlined'
-              color={myProjectsView ? 'primary' : 'default'}
-              icon={<FontAwesomeIcon icon={faUser} />}
-              onClick={() => {
-                setMyProjectsView(!myProjectsView);
-                setPage(1);
-              }}
-            >
-              My Projects
-            </Button>
-            <Button
-              variant='outlined'
-              color={starredProjectsView ? 'primary' : 'default'}
-              icon={<FontAwesomeIcon icon={faStar} />}
-              onClick={() => {
-                setStarredProjectsView(!starredProjectsView);
-                setPage(1);
-              }}
-            >
-              Starred Projects
-            </Button>
-          </Space>
-        </Flex>
-        <Empty />
-      </>
-    );
-  }
+  const isEmpty = !data || filteredProjects.length === 0;
 
   return (
     <>
-      <Flex align='center' className='mb-6' gap={8}>
+      <Flex align='center' className={isEmpty ? 'mb-20' : 'mb-6'} gap={8}>
         <ProjectListFilter onChange={handleFilterChange} init={filter} />
+        {availableLabels.length > 0 && (
+          <Select
+            mode='multiple'
+            allowClear
+            placeholder='Filter by labels'
+            options={availableLabels.map((label) => ({ label, value: label }))}
+            value={selectedLabels}
+            onChange={setSelectedLabels}
+            className='min-w-48 max-w-96'
+            maxTagCount='responsive'
+          />
+        )}
         <Space className='ml-auto'>
           <Button
             variant='outlined'
@@ -127,28 +123,34 @@ export const ProjectsList = () => {
           </Button>
         </Space>
       </Flex>
-      <div className={styles.list}>
-        {data.projects.map((proj) => (
-          <ProjectItem
-            key={proj?.metadata?.name}
-            project={proj}
-            starred={starred.includes(proj?.metadata?.uid || '')}
-            onToggleStar={(id) => toggleStar(id)}
-            projectLabelPrefixes={projectLabelPrefixes}
-          />
-        ))}
-      </div>
-      <Flex justify='flex-end' className='mt-8'>
-        <Pagination
-          total={data?.total || 0}
-          className='ml-auto flex-shrink-0'
-          pageSize={pageSize}
-          current={page}
-          onChange={handlePaginationChange}
-          showSizeChanger
-          hideOnSinglePage
-        />
-      </Flex>
+      {isEmpty ? (
+        <Empty />
+      ) : (
+        <>
+          <div className={styles.list}>
+            {filteredProjects.map((proj) => (
+              <ProjectItem
+                key={proj?.metadata?.name}
+                project={proj}
+                starred={starred.includes(proj?.metadata?.uid || '')}
+                onToggleStar={(id) => toggleStar(id)}
+                projectLabelPrefixes={projectLabelPrefixes}
+              />
+            ))}
+          </div>
+          <Flex justify='flex-end' className='mt-8'>
+            <Pagination
+              total={data?.total || 0}
+              className='ml-auto flex-shrink-0'
+              pageSize={pageSize}
+              current={page}
+              onChange={handlePaginationChange}
+              showSizeChanger
+              hideOnSinglePage
+            />
+          </Flex>
+        </>
+      )}
     </>
   );
 };
