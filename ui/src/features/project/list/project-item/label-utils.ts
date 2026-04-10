@@ -1,3 +1,16 @@
+import { ColorMapHex } from '@ui/features/stage/utils';
+
+const PALETTE = Object.values(ColorMapHex);
+
+/** Returns a deterministic hex color for a label key by hashing the string. */
+export function colorForLabelKey(key: string): string {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  }
+  return PALETTE[Math.abs(hash) % PALETTE.length];
+}
+
 /**
  * Given a label map and a list of prefix strings, returns only the labels
  * whose keys begin with one of the given prefixes, with the matching prefix
@@ -22,4 +35,42 @@ export function filterLabelsByPrefixes(
     }
   }
   return result;
+}
+
+/** Formats a label as a display string for use in filters and tags. */
+export function formatLabel(label: { key: string; value: string }): string {
+  return label.value ? `${label.key}: ${label.value}` : label.key;
+}
+
+/**
+ * Collects all unique display-label strings across multiple label maps.
+ * Returns sorted strings suitable for use as filter options.
+ */
+export function collectUniqueLabels(
+  labelMaps: Array<Record<string, string>>,
+  prefixes: string[]
+): string[] {
+  const seen = new Set<string>();
+  for (const labels of labelMaps) {
+    for (const label of filterLabelsByPrefixes(labels, prefixes)) {
+      seen.add(formatLabel(label));
+    }
+  }
+  return Array.from(seen).sort();
+}
+
+/**
+ * Returns true if a label map contains all of the selected display-label
+ * strings. An empty selection matches everything.
+ */
+export function matchesSelectedLabels(
+  labels: Record<string, string>,
+  prefixes: string[],
+  selectedLabels: string[]
+): boolean {
+  if (selectedLabels.length === 0) {
+    return true;
+  }
+  const projectLabels = new Set(filterLabelsByPrefixes(labels, prefixes).map(formatLabel));
+  return selectedLabels.every((label) => projectLabels.has(label));
 }

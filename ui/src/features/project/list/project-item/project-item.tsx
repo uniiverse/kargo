@@ -1,9 +1,10 @@
 import { faHeart, faStar } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { Button, Divider, Flex, Tag, theme, Typography } from 'antd';
+import { Button, Divider, Flex, theme, Typography } from 'antd';
 import { Link, generatePath } from 'react-router-dom';
 
 import { paths } from '@ui/config/paths';
+import { ColoredTag } from '@ui/features/common/colored-tag';
 import { DESCRIPTION_ANNOTATION_KEY } from '@ui/features/common/utils';
 import type { Project } from '@ui/gen/api/v2/models';
 
@@ -26,10 +27,7 @@ export const ProjectItem = ({
   const { token } = theme.useToken();
   const primaryColor = token.colorPrimary;
 
-  const labels = filterLabelsByPrefixes(
-    project?.metadata?.labels ?? {},
-    projectLabelPrefixes
-  );
+  const labels = filterLabelsByPrefixes(project?.metadata?.labels ?? {}, projectLabelPrefixes);
 
   return (
     <Link
@@ -63,10 +61,8 @@ export const ProjectItem = ({
       </Flex>
       {labels.length > 0 && (
         <Flex wrap gap={4} className='mt-2'>
-          {labels.map(({ key, value }) => (
-            <Tag key={key} className='!mr-0'>
-              {value ? `${key}: ${value}` : key}
-            </Tag>
+          {labels.map((label) => (
+            <ColoredTag key={label.key} label={label} />
           ))}
         </Flex>
       )}

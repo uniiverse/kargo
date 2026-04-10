@@ -67,7 +67,7 @@ func Test_server_getConfig(t *testing.T) {
 	testRESTEndpoint(
 		t, &config.ServerConfig{
 			SecretManagementEnabled: true,
-			ProjectLabelPrefixes:   []string{"universe.engineer/"},
+			ProjectLabelPrefixes:    []string{"universe.engineer/"},
 			ArgoCDConfig: config.ArgoCDConfig{
 				URLs: map[string]string{
 					"": "https://argocd.example.com",
