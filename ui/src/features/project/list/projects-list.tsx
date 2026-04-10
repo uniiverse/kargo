@@ -1,8 +1,8 @@
 import { useQuery } from '@connectrpc/connect-query';
 import { faStar, faUser } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { Empty, Flex, Pagination, Space, Tag, Tooltip } from 'antd';
-import { useEffect, useState } from 'react';
+import { Empty, Flex, Pagination, Select, Space, Tag, Tooltip } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 
 import { LoadingState } from '@ui/features/common';
 import {
@@ -12,6 +12,7 @@ import {
 
 import { useLocalStorage } from '../../../utils/use-local-storage';
 
+import { collectUniqueLabels, matchesSelectedLabels } from './project-item/label-utils';
 import { ProjectItem } from './project-item/project-item';
 import { ProjectListFilter } from './project-list-filter';
 import * as styles from './projects-list.module.less';
@@ -34,6 +35,7 @@ export const ProjectsList = () => {
 
   const { data: configData } = useQuery(getConfig);
   const projectLabelPrefixes = configData?.projectLabelPrefixes ?? [];
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
 
   const { data, isLoading } = useQuery(listProjects, {
     pageSize: pageSize,
@@ -59,55 +61,43 @@ export const ProjectsList = () => {
     setPage(1);
   };
 
+  const availableLabels = useMemo(
+    () =>
+      collectUniqueLabels(
+        (data?.projects ?? []).map((p) => p.metadata?.labels ?? {}),
+        projectLabelPrefixes
+      ),
+    [data?.projects, projectLabelPrefixes]
+  );
+
+  const filteredProjects = useMemo(
+    () =>
+      (data?.projects ?? []).filter((p) =>
+        matchesSelectedLabels(p.metadata?.labels ?? {}, projectLabelPrefixes, selectedLabels)
+      ),
+    [data?.projects, projectLabelPrefixes, selectedLabels]
+  );
+
   if (isLoading) return <LoadingState />;
 
-  const isEmpty = !data || data.projects.length === 0;
-
-  if (isEmpty) {
-    return (
-      <>
-        <Flex align='center' className='mb-20' gap={8}>
-          <ProjectListFilter onChange={handleFilterChange} init={filter} />
-          <Space className='ml-auto'>
-            <Tooltip title='Shows projects you have been explicitly granted access to. Broad system-level permissions (e.g. kargo-admin) do not qualify.'>
-              <Tag.CheckableTag
-                checked={myProjectsView}
-                onChange={(checked) => {
-                  setMyProjectsView(checked);
-                  setPage(1);
-                }}
-              >
-                <FontAwesomeIcon icon={faUser} className='mr-1' />
-                My Projects
-              </Tag.CheckableTag>
-            </Tooltip>
-            <Tag.CheckableTag
-              checked={starredProjectsView}
-              onChange={(checked) => {
-                setStarredProjectsView(checked);
-                setPage(1);
-              }}
-            >
-              <FontAwesomeIcon icon={faStar} className='mr-1' />
-              Starred Projects
-            </Tag.CheckableTag>
-          </Space>
-        </Flex>
-        <Empty
-          description={
-            myProjectsView
-              ? 'No projects are directly assigned to your account. Disable this filter to see all projects.'
-              : undefined
-          }
-        />
-      </>
-    );
-  }
+  const isEmpty = !data || filteredProjects.length === 0;
 
   return (
     <>
-      <Flex align='center' className='mb-6' gap={8}>
+      <Flex align='center' className={isEmpty ? 'mb-20' : 'mb-6'} gap={8}>
         <ProjectListFilter onChange={handleFilterChange} init={filter} />
+        {availableLabels.length > 0 && (
+          <Select
+            mode='multiple'
+            allowClear
+            placeholder='Filter by labels'
+            options={availableLabels.map((label) => ({ label, value: label }))}
+            value={selectedLabels}
+            onChange={setSelectedLabels}
+            className='min-w-48 max-w-96'
+            maxTagCount='responsive'
+          />
+        )}
         <Space className='ml-auto'>
           <Tooltip title='Shows projects you have been explicitly granted access to. Broad system-level permissions (e.g. kargo-admin) do not qualify.'>
             <Tag.CheckableTag
@@ -133,28 +123,40 @@ export const ProjectsList = () => {
           </Tag.CheckableTag>
         </Space>
       </Flex>
-      <div className={styles.list}>
-        {data.projects.map((proj) => (
-          <ProjectItem
-            key={proj?.metadata?.name}
-            project={proj}
-            starred={starred.includes(proj?.metadata?.uid || '')}
-            onToggleStar={(id) => toggleStar(id)}
-            projectLabelPrefixes={projectLabelPrefixes}
-          />
-        ))}
-      </div>
-      <Flex justify='flex-end' className='mt-8'>
-        <Pagination
-          total={data?.total || 0}
-          className='ml-auto flex-shrink-0'
-          pageSize={pageSize}
-          current={page}
-          onChange={handlePaginationChange}
-          showSizeChanger
-          hideOnSinglePage
+      {isEmpty ? (
+        <Empty
+          description={
+            myProjectsView
+              ? 'No projects are directly assigned to your account. Disable this filter to see all projects.'
+              : undefined
+          }
         />
-      </Flex>
+      ) : (
+        <>
+          <div className={styles.list}>
+            {filteredProjects.map((proj) => (
+              <ProjectItem
+                key={proj?.metadata?.name}
+                project={proj}
+                starred={starred.includes(proj?.metadata?.uid || '')}
+                onToggleStar={(id) => toggleStar(id)}
+                projectLabelPrefixes={projectLabelPrefixes}
+              />
+            ))}
+          </div>
+          <Flex justify='flex-end' className='mt-8'>
+            <Pagination
+              total={data?.total || 0}
+              className='ml-auto flex-shrink-0'
+              pageSize={pageSize}
+              current={page}
+              onChange={handlePaginationChange}
+              showSizeChanger
+              hideOnSinglePage
+            />
+          </Flex>
+        </>
+      )}
     </>
   );
 };

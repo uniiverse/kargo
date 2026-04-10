@@ -109,7 +109,7 @@ func ServerConfigFromEnv() ServerConfig {
 	cfg.KargoNamespace = os.GetEnv("KARGO_NAMESPACE", "kargo")
 	cfg.DefaultControllerName = os.GetEnv("DEFAULT_CONTROLLER_NAME", "")
 	cfg.ProjectLabelPrefixes = parseProjectLabelPrefixes(
-		os.GetEnv("PROJECT_LABEL_PREFIXES", ""),
+		os.GetEnv("PROJECT_LABEL_PREFIXES", "universe.engineer/"),
 	)
 	return cfg
 }
