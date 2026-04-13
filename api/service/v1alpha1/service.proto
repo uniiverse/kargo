@@ -1009,6 +1009,9 @@ message CreateConfigMapRequest {
   string description = 4;
   // data contains the key-value pairs that make up the ConfigMap.
   map<string, string> data = 5;
+  // replicate, when true, replicates this ConfigMap to all Project namespaces
+  // by setting the kargo.akuity.io/replicate-to: "*" annotation.
+  bool replicate = 6;
 }
 
 // CreateConfigMapResponse is the response containing the ConfigMap that was
@@ -1098,6 +1101,9 @@ message UpdateConfigMapRequest {
   string description = 4;
   // data contains the key-value pairs that make up the ConfigMap.
   map<string, string> data = 5;
+  // replicate, when true, replicates this ConfigMap to all Project namespaces
+  // by setting the kargo.akuity.io/replicate-to: "*" annotation.
+  bool replicate = 6;
 }
 
 // UpdateConfigMapResponse is the response containing the updated ConfigMap.
@@ -1242,6 +1248,9 @@ message CreateGenericCredentialsRequest {
   string description = 3;
   // data contains the key-value pairs that make up the generic credentials data.
   map<string, string> data = 4;
+  // replicate, when true, replicates these credentials to all Project
+  // namespaces by setting the kargo.akuity.io/replicate-to: "*" annotation.
+  bool replicate = 5;
 }
 
 // CreateGenericCredentialsResponse contains the newly created generic credentials.
@@ -1265,6 +1274,9 @@ message UpdateGenericCredentialsRequest {
   string description = 3;
   // data contains the key-value pairs that make up the generic credentials data.
   map<string, string> data = 4;
+  // replicate, when true, replicates these credentials to all Project
+  // namespaces by setting the kargo.akuity.io/replicate-to: "*" annotation.
+  bool replicate = 5;
 }
 
 // UpdateGenericCredentialsResponse contains the updated generic credentials information.
