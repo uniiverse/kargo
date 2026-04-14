@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
+	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcv1alpha1 "github.com/akuity/kargo/api/service/v1alpha1"
@@ -38,22 +40,54 @@ func (s *server) WatchPromotion(
 		return fmt.Errorf("get promotion: %w", err)
 	}
 
-	w, err := s.client.Watch(
-		ctx,
-		&kargoapi.PromotionList{},
+	watchOpts := []client.ListOption{
 		client.InNamespace(project),
 		client.MatchingFields{"metadata.name": name},
-	)
-	if err != nil {
-		return fmt.Errorf("watch promotion: %w", err)
 	}
-	defer w.Stop()
+	logger := logging.LoggerFromContext(ctx)
+
+	keepaliveTicker := time.NewTicker(30 * time.Second)
+	defer keepaliveTicker.Stop()
+
+	for {
+		w, err := s.client.Watch(
+			ctx,
+			&kargoapi.PromotionList{},
+			watchOpts...,
+		)
+		if err != nil {
+			return fmt.Errorf("watch promotion: %w", err)
+		}
+
+		if err := s.streamPromotionEvents(
+			ctx, w, stream, keepaliveTicker,
+		); err != nil {
+			w.Stop()
+			return err
+		}
+		w.Stop()
+		logger.Debug("watch channel closed, re-establishing watch")
+	}
+}
+
+func (s *server) streamPromotionEvents(
+	ctx context.Context,
+	w watch.Interface,
+	stream *connect.ServerStream[svcv1alpha1.WatchPromotionResponse],
+	keepaliveTicker *time.Ticker,
+) error {
 	for {
 		select {
 		case <-ctx.Done():
 			logger := logging.LoggerFromContext(ctx)
 			logger.Debug(ctx.Err().Error())
-			return nil
+			return ctx.Err()
+		case <-keepaliveTicker.C:
+			if err := stream.Send(&svcv1alpha1.WatchPromotionResponse{
+				Type: "KEEPALIVE",
+			}); err != nil {
+				return fmt.Errorf("send keepalive: %w", err)
+			}
 		case e, ok := <-w.ResultChan():
 			if !ok {
 				return nil

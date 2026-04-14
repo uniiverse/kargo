@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
+	"k8s.io/apimachinery/pkg/watch"
 	libClient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcv1alpha1 "github.com/akuity/kargo/api/service/v1alpha1"
@@ -41,17 +43,46 @@ func (s *server) WatchWarehouses(
 	if name != "" {
 		watchOpts = append(watchOpts, libClient.MatchingFields{"metadata.name": name})
 	}
-	w, err := s.client.Watch(ctx, &kargoapi.WarehouseList{}, watchOpts...)
-	if err != nil {
-		return fmt.Errorf("watch warehouse: %w", err)
+	logger := logging.LoggerFromContext(ctx)
+
+	keepaliveTicker := time.NewTicker(30 * time.Second)
+	defer keepaliveTicker.Stop()
+
+	for {
+		w, err := s.client.Watch(ctx, &kargoapi.WarehouseList{}, watchOpts...)
+		if err != nil {
+			return fmt.Errorf("watch warehouse: %w", err)
+		}
+
+		if err := s.streamWarehouseEvents(
+			ctx, w, stream, keepaliveTicker,
+		); err != nil {
+			w.Stop()
+			return err
+		}
+		w.Stop()
+		logger.Debug("watch channel closed, re-establishing watch")
 	}
-	defer w.Stop()
+}
+
+func (s *server) streamWarehouseEvents(
+	ctx context.Context,
+	w watch.Interface,
+	stream *connect.ServerStream[svcv1alpha1.WatchWarehousesResponse],
+	keepaliveTicker *time.Ticker,
+) error {
 	for {
 		select {
 		case <-ctx.Done():
 			logger := logging.LoggerFromContext(ctx)
 			logger.Debug(ctx.Err().Error())
-			return nil
+			return ctx.Err()
+		case <-keepaliveTicker.C:
+			if err := stream.Send(&svcv1alpha1.WatchWarehousesResponse{
+				Type: "KEEPALIVE",
+			}); err != nil {
+				return fmt.Errorf("send keepalive: %w", err)
+			}
 		case e, ok := <-w.ResultChan():
 			if !ok {
 				return nil

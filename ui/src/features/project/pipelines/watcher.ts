@@ -31,21 +31,25 @@ async function ProcessEvents<T extends { type: string }, S extends { metadata?: 
   callback: (item: S, data: S[]) => void
 ) {
   for await (const e of stream) {
+    const obj = getter(e);
+    if (!obj) {
+      continue;
+    }
     let data = getData();
-    const index = data.findIndex((item) => item.metadata?.name === getter(e).metadata?.name);
+    const index = data.findIndex((item) => item.metadata?.name === obj.metadata?.name);
     if (e.type === 'DELETED') {
       if (index !== -1) {
         data = [...data.slice(0, index), ...data.slice(index + 1)];
       }
     } else {
       if (index === -1) {
-        data = [...data, getter(e)];
+        data = [...data, obj];
       } else {
-        data = [...data.slice(0, index), getter(e), ...data.slice(index + 1)];
+        data = [...data.slice(0, index), obj, ...data.slice(index + 1)];
       }
     }
 
-    callback(getter(e), data);
+    callback(obj, data);
   }
 }
 
