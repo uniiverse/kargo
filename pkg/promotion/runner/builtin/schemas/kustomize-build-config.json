@@ -20,6 +20,18 @@
       "description": "Specifies the naming convention for output files when writing to a directory. 'kargo' (default) uses '[namespace-]kind-name.yaml' format (e.g., 'deployment-myapp.yaml'). 'kustomize' matches the naming convention of 'kustomize build -o dir/', using '[namespace_]group_version_kind_name.yaml' format (e.g., 'apps_v1_deployment_myapp.yaml').",
       "enum": ["kargo", "kustomize"]
     },
+    "kustomize": {
+      "type": "object",
+      "description": "Kustomize contains configuration for customizing Kustomize behavior.",
+      "additionalProperties": false,
+      "properties": {
+        "enableAlphaPlugins": {
+          "type": "boolean",
+          "description": "EnableAlphaPlugins enables the use of Kustomize alpha plugins such as KRM function plugins. This is equivalent to the --enable-alpha-plugins flag in the kustomize CLI. When enabled, Kustomizations may reference KRM container-based function plugins. Defaults to false.",
+          "default": false
+        }
+      }
+    },
     "plugin": {
       "type": "object",
       "description": "Plugin contains configuration for customizing the behavior of builtin Kustomize plugins.",

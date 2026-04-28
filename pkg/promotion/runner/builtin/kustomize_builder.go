@@ -35,7 +35,8 @@ func init() {
 // kustomizeBuilder is an implementation of the promotion.StepRunner interface
 // that builds a set of Kubernetes manifests using Kustomize.
 type kustomizeBuilder struct {
-	schemaLoader gojsonschema.JSONLoader
+	schemaLoader        gojsonschema.JSONLoader
+	alphaPluginsAllowed bool
 }
 
 // newKustomizeBuilder returns an implementation of the
@@ -43,7 +44,8 @@ type kustomizeBuilder struct {
 // Kustomize.
 func newKustomizeBuilder(promotion.StepRunnerCapabilities) promotion.StepRunner {
 	return &kustomizeBuilder{
-		schemaLoader: getConfigSchemaLoader(stepKindKustomizeBuild),
+		schemaLoader:        getConfigSchemaLoader(stepKindKustomizeBuild),
+		alphaPluginsAllowed: os.Getenv("KUSTOMIZE_ENABLE_ALPHA_PLUGINS") == "true",
 	}
 }
 
@@ -87,7 +89,8 @@ func (k *kustomizeBuilder) run(
 	if err = kustomizeBuild(
 		diskFS,
 		filepath.Join(stepCtx.WorkDir, cfg.Path),
-		cfg.Plugin,
+		cfg,
+		k.alphaPluginsAllowed,
 		func(rm kustomize.ResMap) error {
 			if writeErr := k.writeResult(rm, outPath, cfg.OutputFormat); writeErr != nil {
 				return fmt.Errorf(
@@ -141,22 +144,11 @@ func (k *kustomizeBuilder) writeResult(rm kustomize.ResMap, outPath string, outp
 func kustomizeBuild(
 	kusFS filesys.FileSystem,
 	path string,
-	pluginCfg *builtin.Plugin,
+	cfg builtin.KustomizeBuildConfig,
+	alphaPluginsAllowed bool,
 	use func(kustomize.ResMap) error,
 ) error {
-	// Disable plugins (i.e. "function based" plugins), but enable builtins
-	// (e.g. transformers, generators).
-	buildPluginCfg := kustypes.DisabledPluginConfig()
-	// Helm plugin builtin requires explicit enabling. Kustomize itself ensures
-	// the further Helm files (e.g. cache, data) are stored in a temporary
-	// directory, AS LONG AS the global configuration is not set.
-	buildPluginCfg.HelmConfig.Enabled = true
-	buildPluginCfg.HelmConfig.Command = "helm"
-
-	if pluginCfg != nil && pluginCfg.Helm != nil {
-		buildPluginCfg.HelmConfig.ApiVersions = pluginCfg.Helm.APIVersions
-		buildPluginCfg.HelmConfig.KubeVersion = pluginCfg.Helm.KubeVersion
-	}
+	buildPluginCfg := buildKustomizePluginConfig(cfg, alphaPluginsAllowed)
 
 	buildOptions := &kustomize.Options{
 		// As we make use of a "chrooted" filesystem, we can safely allow
@@ -177,6 +169,38 @@ func kustomizeBuild(
 		return err
 	}
 	return nil
+}
+
+func buildKustomizePluginConfig(
+	cfg builtin.KustomizeBuildConfig,
+	alphaPluginsAllowed bool,
+) *kustypes.PluginConfig {
+	var buildPluginCfg *kustypes.PluginConfig
+	if alphaPluginsAllowed &&
+		cfg.Kustomize != nil &&
+		cfg.Kustomize.EnableAlphaPlugins {
+		buildPluginCfg = kustypes.EnabledPluginConfig(kustypes.BploUseStaticallyLinked)
+		// Exec-based KRM functions are explicitly disabled; only
+		// container-based KRM functions are permitted.
+		buildPluginCfg.FnpLoadingOptions.EnableExec = false
+	} else {
+		// Disable plugins (i.e. "function based" plugins), but enable builtins
+		// (e.g. transformers, generators).
+		buildPluginCfg = kustypes.DisabledPluginConfig()
+	}
+
+	// Helm plugin builtin requires explicit enabling. Kustomize itself ensures
+	// the further Helm files (e.g. cache, data) are stored in a temporary
+	// directory, AS LONG AS the global configuration is not set.
+	buildPluginCfg.HelmConfig.Enabled = true
+	buildPluginCfg.HelmConfig.Command = "helm"
+
+	if cfg.Plugin != nil && cfg.Plugin.Helm != nil {
+		buildPluginCfg.HelmConfig.ApiVersions = cfg.Plugin.Helm.APIVersions
+		buildPluginCfg.HelmConfig.KubeVersion = cfg.Plugin.Helm.KubeVersion
+	}
+
+	return buildPluginCfg
 }
 
 // fileNameFunc generates a filename for a resource.

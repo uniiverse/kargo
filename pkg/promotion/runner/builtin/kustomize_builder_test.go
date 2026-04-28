@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/repo"
 	"k8s.io/utils/ptr"
+	kustypes "sigs.k8s.io/kustomize/api/types"
 
 	kargoapi "github.com/akuity/kargo/api/v1alpha1"
 	"github.com/akuity/kargo/pkg/io/fs"
@@ -150,10 +151,35 @@ func Test_kustomizeBuilder_convert(t *testing.T) {
 			expectedProblems: nil,
 		},
 		{
+			name: "valid config with enableAlphaPlugins",
+			config: promotion.Config{
+				"path":    "/kustomization/path",
+				"outPath": "/output/manifests.yaml",
+				"kustomize": promotion.Config{
+					"enableAlphaPlugins": true,
+				},
+			},
+			expectedProblems: nil,
+		},
+		{
+			name: "valid config with enableAlphaPlugins false",
+			config: promotion.Config{
+				"path":    "/kustomization/path",
+				"outPath": "/output/manifests.yaml",
+				"kustomize": promotion.Config{
+					"enableAlphaPlugins": false,
+				},
+			},
+			expectedProblems: nil,
+		},
+		{
 			name: "valid kitchen sink",
 			config: promotion.Config{
 				"path":    "/path/to/kustomization/directory",
 				"outPath": "/output/built-manifests.yaml",
+				"kustomize": promotion.Config{
+					"enableAlphaPlugins": true,
+				},
 				"plugin": promotion.Config{
 					"helm": promotion.Config{
 						"kubeVersion": "1.29.2",
@@ -472,6 +498,95 @@ metadata:
 
 			result, err := runner.run(stepCtx, tt.config)
 			tt.assertions(t, tempDir, result, err)
+		})
+	}
+}
+
+func Test_buildKustomizePluginConfig(t *testing.T) {
+	tests := []struct {
+		name                string
+		cfg                 builtin.KustomizeBuildConfig
+		alphaPluginsAllowed bool
+		assert              func(*testing.T, *kustypes.PluginConfig)
+	}{
+		{
+			name:                "default config",
+			cfg:                 builtin.KustomizeBuildConfig{},
+			alphaPluginsAllowed: false,
+			assert: func(t *testing.T, cfg *kustypes.PluginConfig) {
+				require.Equal(t, kustypes.PluginRestrictionsBuiltinsOnly, cfg.PluginRestrictions)
+				require.True(t, cfg.HelmConfig.Enabled)
+				require.Equal(t, "helm", cfg.HelmConfig.Command)
+			},
+		},
+		{
+			name: "alpha plugins enabled and allowed",
+			cfg: builtin.KustomizeBuildConfig{
+				Kustomize: &builtin.KustomizeClass{
+					EnableAlphaPlugins: true,
+				},
+			},
+			alphaPluginsAllowed: true,
+			assert: func(t *testing.T, cfg *kustypes.PluginConfig) {
+				require.Equal(t, kustypes.PluginRestrictionsNone, cfg.PluginRestrictions)
+				require.False(t, cfg.FnpLoadingOptions.EnableExec)
+				require.True(t, cfg.HelmConfig.Enabled)
+				require.Equal(t, "helm", cfg.HelmConfig.Command)
+			},
+		},
+		{
+			name: "alpha plugins enabled but not allowed by env",
+			cfg: builtin.KustomizeBuildConfig{
+				Kustomize: &builtin.KustomizeClass{
+					EnableAlphaPlugins: true,
+				},
+			},
+			alphaPluginsAllowed: false,
+			assert: func(t *testing.T, cfg *kustypes.PluginConfig) {
+				require.Equal(t, kustypes.PluginRestrictionsBuiltinsOnly, cfg.PluginRestrictions)
+				require.True(t, cfg.HelmConfig.Enabled)
+			},
+		},
+		{
+			name: "alpha plugins disabled explicitly",
+			cfg: builtin.KustomizeBuildConfig{
+				Kustomize: &builtin.KustomizeClass{
+					EnableAlphaPlugins: false,
+				},
+			},
+			alphaPluginsAllowed: true,
+			assert: func(t *testing.T, cfg *kustypes.PluginConfig) {
+				require.Equal(t, kustypes.PluginRestrictionsBuiltinsOnly, cfg.PluginRestrictions)
+			},
+		},
+		{
+			name: "alpha plugins with helm config",
+			cfg: builtin.KustomizeBuildConfig{
+				Kustomize: &builtin.KustomizeClass{
+					EnableAlphaPlugins: true,
+				},
+				Plugin: &builtin.Plugin{
+					Helm: &builtin.HelmClass{
+						APIVersions: []string{"v1", "apps/v1"},
+						KubeVersion: "1.29.0",
+					},
+				},
+			},
+			alphaPluginsAllowed: true,
+			assert: func(t *testing.T, cfg *kustypes.PluginConfig) {
+				require.Equal(t, kustypes.PluginRestrictionsNone, cfg.PluginRestrictions)
+				require.False(t, cfg.FnpLoadingOptions.EnableExec)
+				require.True(t, cfg.HelmConfig.Enabled)
+				require.Equal(t, "helm", cfg.HelmConfig.Command)
+				require.Equal(t, []string{"v1", "apps/v1"}, cfg.HelmConfig.ApiVersions)
+				require.Equal(t, "1.29.0", cfg.HelmConfig.KubeVersion)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildKustomizePluginConfig(tt.cfg, tt.alphaPluginsAllowed)
+			tt.assert(t, result)
 		})
 	}
 }
