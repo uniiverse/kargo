@@ -44,7 +44,8 @@ var kustomizeRenderMutex sync.Mutex
 // kustomizeBuilder is an implementation of the promotion.StepRunner interface
 // that builds a set of Kubernetes manifests using Kustomize.
 type kustomizeBuilder struct {
-	schemaLoader gojsonschema.JSONLoader
+	schemaLoader        gojsonschema.JSONLoader
+	alphaPluginsAllowed bool
 }
 
 // newKustomizeBuilder returns an implementation of the
@@ -52,7 +53,8 @@ type kustomizeBuilder struct {
 // Kustomize.
 func newKustomizeBuilder(promotion.StepRunnerCapabilities) promotion.StepRunner {
 	return &kustomizeBuilder{
-		schemaLoader: getConfigSchemaLoader(stepKindKustomizeBuild),
+		schemaLoader:        getConfigSchemaLoader(stepKindKustomizeBuild),
+		alphaPluginsAllowed: os.Getenv("KUSTOMIZE_ENABLE_ALPHA_PLUGINS") == "true",
 	}
 }
 
@@ -87,7 +89,7 @@ func (k *kustomizeBuilder) run(
 	}
 
 	// Build the manifests.
-	rm, err := kustomizeBuild(diskFS, filepath.Join(stepCtx.WorkDir, cfg.Path), cfg.Plugin)
+	rm, err := kustomizeBuild(diskFS, filepath.Join(stepCtx.WorkDir, cfg.Path), cfg, k.alphaPluginsAllowed)
 	if err != nil {
 		return promotion.StepResult{Status: kargoapi.PromotionStepStatusErrored}, err
 	}
@@ -141,7 +143,12 @@ func (k *kustomizeBuilder) writeResult(rm resmap.ResMap, outPath string, outputF
 }
 
 // kustomizeBuild builds the manifests in the given directory using Kustomize.
-func kustomizeBuild(kusFS filesys.FileSystem, path string, pluginCfg *builtin.Plugin) (_ resmap.ResMap, err error) {
+func kustomizeBuild(
+	kusFS filesys.FileSystem,
+	path string,
+	cfg builtin.KustomizeBuildConfig,
+	alphaPluginsAllowed bool,
+) (_ resmap.ResMap, err error) {
 	kustomizeRenderMutex.Lock()
 	defer kustomizeRenderMutex.Unlock()
 
@@ -154,19 +161,7 @@ func kustomizeBuild(kusFS filesys.FileSystem, path string, pluginCfg *builtin.Pl
 		}
 	}()
 
-	// Disable plugins (i.e. "function based" plugins), but enable builtins
-	// (e.g. transformers, generators).
-	buildPluginCfg := kustypes.DisabledPluginConfig()
-	// Helm plugin builtin requires explicit enabling. Kustomize itself ensures
-	// the further Helm files (e.g. cache, data) are stored in a temporary
-	// directory, AS LONG AS the global configuration is not set.
-	buildPluginCfg.HelmConfig.Enabled = true
-	buildPluginCfg.HelmConfig.Command = "helm"
-
-	if pluginCfg != nil && pluginCfg.Helm != nil {
-		buildPluginCfg.HelmConfig.ApiVersions = pluginCfg.Helm.APIVersions
-		buildPluginCfg.HelmConfig.KubeVersion = pluginCfg.Helm.KubeVersion
-	}
+	buildPluginCfg := buildKustomizePluginConfig(cfg, alphaPluginsAllowed)
 
 	buildOptions := &krusty.Options{
 		// As we make use of a "chrooted" filesystem, we can safely allow
@@ -177,6 +172,36 @@ func kustomizeBuild(kusFS filesys.FileSystem, path string, pluginCfg *builtin.Pl
 
 	k := krusty.MakeKustomizer(buildOptions)
 	return k.Run(kusFS, path)
+}
+
+func buildKustomizePluginConfig(
+	cfg builtin.KustomizeBuildConfig,
+	alphaPluginsAllowed bool,
+) *kustypes.PluginConfig {
+	var buildPluginCfg *kustypes.PluginConfig
+	if alphaPluginsAllowed &&
+		cfg.Kustomize != nil &&
+		cfg.Kustomize.EnableAlphaPlugins {
+		buildPluginCfg = kustypes.EnabledPluginConfig(kustypes.BploUseStaticallyLinked)
+		// Exec-based KRM functions are explicitly disabled; only
+		// container-based KRM functions are permitted.
+		buildPluginCfg.FnpLoadingOptions.EnableExec = false
+	} else {
+		buildPluginCfg = kustypes.DisabledPluginConfig()
+	}
+
+	// Helm plugin builtin requires explicit enabling. Kustomize itself ensures
+	// the further Helm files (e.g. cache, data) are stored in a temporary
+	// directory, AS LONG AS the global configuration is not set.
+	buildPluginCfg.HelmConfig.Enabled = true
+	buildPluginCfg.HelmConfig.Command = "helm"
+
+	if cfg.Plugin != nil && cfg.Plugin.Helm != nil {
+		buildPluginCfg.HelmConfig.ApiVersions = cfg.Plugin.Helm.APIVersions
+		buildPluginCfg.HelmConfig.KubeVersion = cfg.Plugin.Helm.KubeVersion
+	}
+
+	return buildPluginCfg
 }
 
 // fileNameFunc generates a filename for a resource.
