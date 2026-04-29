@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StringReplacerConfig",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["inPath", "outPath"],
+  "properties": {
+    "inPath": {
+      "type": "string",
+      "description": "InPath is the path to a YAML file containing Kubernetes manifests. The file may contain multiple documents separated by '---'. One of the documents must be a StringReplacer resource (kind: StringReplacer) whose replacements map drives the string substitutions.",
+      "minLength": 1
+    },
+    "outPath": {
+      "type": "string",
+      "description": "OutPath is the path to write the resulting YAML after replacements have been applied. The StringReplacer resource is excluded from the output.",
+      "minLength": 1
+    }
+  }
+}

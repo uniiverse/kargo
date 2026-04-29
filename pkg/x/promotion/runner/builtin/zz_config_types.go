@@ -605,8 +605,6 @@ type JSONUpdate struct {
 }
 
 type KustomizeBuildConfig struct {
-	// Kustomize contains configuration for customizing Kustomize behavior.
-	Kustomize *KustomizeClass `json:"kustomize,omitempty"`
 	// OutPath is the file path to write the built manifests to.
 	OutPath string `json:"outPath"`
 	// Specifies the naming convention for output files when writing to a directory. 'kargo'
@@ -618,15 +616,6 @@ type KustomizeBuildConfig struct {
 	Path string `json:"path"`
 	// Plugin contains configuration for customizing the behavior of builtin Kustomize plugins.
 	Plugin *Plugin `json:"plugin,omitempty"`
-}
-
-// Kustomize contains configuration for customizing Kustomize behavior.
-type KustomizeClass struct {
-	// EnableAlphaPlugins enables the use of Kustomize alpha plugins such as KRM function
-	// plugins. This is equivalent to the --enable-alpha-plugins flag in the kustomize CLI. When
-	// enabled, Kustomizations may reference KRM container-based function plugins. Defaults to
-	// false.
-	EnableAlphaPlugins bool `json:"enableAlphaPlugins,omitempty"`
 }
 
 // Plugin contains configuration for customizing the behavior of builtin Kustomize plugins.
@@ -721,6 +710,16 @@ type Update struct {
 	Name string `json:"name"`
 	// Key/value pairs to set as metadata on the resource
 	Values map[string]interface{} `json:"values"`
+}
+
+type StringReplacerConfig struct {
+	// InPath is the path to a YAML file containing Kubernetes manifests. The file may contain
+	// multiple documents separated by '---'. One of the documents must be a ConfigMap with the
+	// annotation universe.engineer/string-replacer: "true" whose data entries drive the string
+	// substitutions.
+	InPath string `json:"inPath"`
+	// OutPath is the path to write the resulting YAML after replacements have been applied.
+	OutPath string `json:"outPath"`
 }
 
 type TOMLParseConfig struct {
