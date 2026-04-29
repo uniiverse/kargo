@@ -22,18 +22,6 @@
     "kustomize"
    ]
   },
-  "kustomize": {
-   "type": "object",
-   "description": "Kustomize contains configuration for customizing Kustomize behavior.",
-   "additionalProperties": false,
-   "properties": {
-    "enableAlphaPlugins": {
-     "type": "boolean",
-     "description": "EnableAlphaPlugins enables the use of Kustomize alpha plugins such as KRM function plugins. This is equivalent to the --enable-alpha-plugins flag in the kustomize CLI. When enabled, Kustomizations may reference KRM container-based function plugins. Defaults to false.",
-     "default": false
-    }
-   }
-  },
   "plugin": {
    "type": "object",
    "description": "Plugin contains configuration for customizing the behavior of builtin Kustomize plugins.",

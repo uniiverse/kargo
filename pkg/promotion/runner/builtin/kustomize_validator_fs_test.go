@@ -12,7 +12,6 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 
 	"github.com/akuity/kargo/pkg/kustomize"
-	"github.com/akuity/kargo/pkg/x/promotion/runner/builtin"
 )
 
 func Test_validateQueryValues(t *testing.T) {
@@ -308,8 +307,7 @@ func Test_kustomizeBuild_remoteGitRefInjection(t *testing.T) {
 			err = kustomizeBuild(
 				diskFS,
 				workDir,
-				builtin.KustomizeBuildConfig{},
-				false,
+				nil,
 				func(kustomize.ResMap) error { return nil },
 			)
 			require.NoFileExists(t, markerPath)
