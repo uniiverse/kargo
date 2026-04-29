@@ -344,6 +344,46 @@ data:
 			},
 		},
 		{
+			name: "output has proper document separators",
+			setupFiles: func(t *testing.T, dir string) {
+				content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: replacements
+  annotations:
+    universe.engineer/string-replacer: "true"
+data:
+  NAME: test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: REPLACE_ME[NAME]
+  namespace: default
+`
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "input.yaml"),
+					[]byte(content), 0o600,
+				))
+			},
+			config: builtin.StringReplacerConfig{
+				InPath:  "input.yaml",
+				OutPath: "output.yaml",
+			},
+			assertions: func(t *testing.T, dir string, result promotion.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, kargoapi.PromotionStepStatusSucceeded, result.Status)
+
+				b, readErr := os.ReadFile(filepath.Join(dir, "output.yaml"))
+				require.NoError(t, readErr)
+				output := string(b)
+				assert.Contains(t, output, "\n---\n",
+					"document separator must be on its own line")
+				assert.NotContains(t, output, "default---",
+					"document separator must not be joined to previous line")
+			},
+		},
+		{
 			name: "ConfigMap without annotation is not used",
 			setupFiles: func(t *testing.T, dir string) {
 				content := `apiVersion: v1

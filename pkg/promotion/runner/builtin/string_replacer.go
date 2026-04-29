@@ -122,7 +122,7 @@ func (s *stringReplacer) run(
 			)
 	}
 
-	output := bytes.Join(result, []byte("---\n"))
+	output := bytes.Join(result, []byte("\n---\n"))
 	if err = os.WriteFile(outPath, output, 0o600); err != nil {
 		return promotion.StepResult{Status: kargoapi.PromotionStepStatusErrored},
 			fmt.Errorf(
