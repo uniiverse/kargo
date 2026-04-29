@@ -29,8 +29,9 @@ output.
 
 1. The input file is split on YAML document separators (`---`).
 2. The step scans for a ConfigMap with the annotation
-   `universe.engineer/string-replacer: "true"`. Exactly one such ConfigMap must
-   exist — zero or more than one is an error.
+   `universe.engineer/string-replacer: "true"`. At most one such ConfigMap may
+   exist — more than one is an error. If none is found, the step skips
+   replacement and proceeds directly to placeholder validation (step 4).
 3. Each key/value pair in the ConfigMap's `data` field defines a replacement:
    every occurrence of `REPLACE_ME[KEY]` in the entire file is replaced with the
    corresponding value.

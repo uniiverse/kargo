@@ -98,7 +98,12 @@ func (s *stringReplacer) run(
 		return promotion.StepResult{Status: kargoapi.PromotionStepStatusErrored}, err
 	}
 
-	result := applyReplacements(docs, replacements)
+	var result [][]byte
+	if replacements != nil {
+		result = applyReplacements(docs, replacements)
+	} else {
+		result = docs
+	}
 
 	if remaining := findUnreplacedPlaceholders(result); len(remaining) > 0 {
 		return promotion.StepResult{Status: kargoapi.PromotionStepStatusErrored},
@@ -203,10 +208,7 @@ func extractReplacements(docs [][]byte) (map[string]string, error) {
 		found = true
 	}
 	if !found {
-		return nil, fmt.Errorf(
-			"no ConfigMap with annotation %q found in input",
-			stringReplacerAnnotation,
-		)
+		return nil, nil
 	}
 	return replacements, nil
 }
