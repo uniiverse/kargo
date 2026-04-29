@@ -5,7 +5,8 @@ import {
   colorForLabelKey,
   filterLabelsByPrefixes,
   formatLabel,
-  matchesSelectedLabels
+  matchesSelectedLabels,
+  wireLabelToDisplay
 } from './label-utils';
 
 describe('colorForLabelKey', () => {
@@ -126,5 +127,33 @@ describe('matchesSelectedLabels', () => {
     expect(matchesSelectedLabels(labels, prefixes, ['team: platform', 'domain: orders'])).toBe(
       false
     );
+  });
+});
+
+describe('wireLabelToDisplay', () => {
+  const prefixes = ['universe.engineer/', 'example.com/'];
+
+  test('strips matching prefix and formats as display string', () => {
+    expect(wireLabelToDisplay('universe.engineer/team=platform', prefixes)).toBe('team: platform');
+  });
+
+  test('strips second prefix when first does not match', () => {
+    expect(wireLabelToDisplay('example.com/domain=orders', prefixes)).toBe('domain: orders');
+  });
+
+  test('falls back to raw key when no prefix matches', () => {
+    expect(wireLabelToDisplay('other.io/key=value', prefixes)).toBe('other.io/key: value');
+  });
+
+  test('handles empty value', () => {
+    expect(wireLabelToDisplay('universe.engineer/flag=', prefixes)).toBe('flag');
+  });
+
+  test('handles wire string without equals sign', () => {
+    expect(wireLabelToDisplay('malformed', prefixes)).toBe('malformed');
+  });
+
+  test('handles value containing equals sign', () => {
+    expect(wireLabelToDisplay('universe.engineer/expr=a=b', prefixes)).toBe('expr: a=b');
   });
 });

@@ -27,6 +27,7 @@ import (
 func TestListProjects(t *testing.T) {
 	testCases := map[string]struct {
 		objects    []client.Object
+		cfg        config.ServerConfig
 		userInfo   *user.Info
 		req        *svcv1alpha1.ListProjectsRequest
 		assertions func(*testing.T, *connect.Response[svcv1alpha1.ListProjectsResponse], error)
@@ -84,6 +85,163 @@ func TestListProjects(t *testing.T) {
 				require.Equal(t, "project-c", r.Msg.GetProjects()[1].GetName())
 			},
 		},
+		"labels filter matches projects": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-a",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-b",
+					Labels: map[string]string{"team.io/name": "backend"},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			req: &svcv1alpha1.ListProjectsRequest{
+				Labels: []string{"team.io/name=platform"},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Len(t, r.Msg.GetProjects(), 1)
+				require.Equal(t, "project-a", r.Msg.GetProjects()[0].GetName())
+				require.Equal(t, int32(1), r.Msg.GetTotal())
+			},
+		},
+		"labels filter no match returns empty": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-a",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			req: &svcv1alpha1.ListProjectsRequest{
+				Labels: []string{"team.io/name=nonexistent"},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Empty(t, r.Msg.GetProjects())
+				require.Equal(t, int32(0), r.Msg.GetTotal())
+			},
+		},
+		"labels filter uses AND logic": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name: "project-a",
+					Labels: map[string]string{
+						"team.io/name": "platform",
+						"team.io/env":  "prod",
+					},
+				}},
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-b",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			req: &svcv1alpha1.ListProjectsRequest{
+				Labels: []string{
+					"team.io/name=platform",
+					"team.io/env=prod",
+				},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Len(t, r.Msg.GetProjects(), 1)
+				require.Equal(t, "project-a", r.Msg.GetProjects()[0].GetName())
+			},
+		},
+		"available_labels computed before label filter": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-a",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-b",
+					Labels: map[string]string{"team.io/name": "backend"},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			req: &svcv1alpha1.ListProjectsRequest{
+				Labels: []string{"team.io/name=platform"},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Len(t, r.Msg.GetProjects(), 1)
+				require.Equal(t, []string{
+					"team.io/name=backend",
+					"team.io/name=platform",
+				}, r.Msg.GetAvailableLabels())
+			},
+		},
+		"available_labels only includes prefix-matching labels": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name: "project-a",
+					Labels: map[string]string{
+						"team.io/name":        "platform",
+						"unrelated/something": "ignored",
+					},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Equal(t, []string{"team.io/name=platform"}, r.Msg.GetAvailableLabels())
+			},
+		},
+		"available_labels empty when no prefixes configured": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "project-a",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Empty(t, r.Msg.GetAvailableLabels())
+			},
+		},
+		"labels filter composes with name filter": {
+			objects: []client.Object{
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "alpha-platform",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "alpha-backend",
+					Labels: map[string]string{"team.io/name": "backend"},
+				}},
+				&kargoapi.Project{ObjectMeta: metav1.ObjectMeta{
+					Name:   "beta-platform",
+					Labels: map[string]string{"team.io/name": "platform"},
+				}},
+			},
+			cfg: config.ServerConfig{
+				ProjectLabelPrefixes: []string{"team.io/"},
+			},
+			req: &svcv1alpha1.ListProjectsRequest{
+				Filter: ptr.To("alpha"),
+				Labels: []string{"team.io/name=platform"},
+			},
+			assertions: func(t *testing.T, r *connect.Response[svcv1alpha1.ListProjectsResponse], err error) {
+				require.NoError(t, err)
+				require.Len(t, r.Msg.GetProjects(), 1)
+				require.Equal(t, "alpha-platform", r.Msg.GetProjects()[0].GetName())
+				require.Equal(t, int32(1), r.Msg.GetTotal())
+			},
+		},
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
@@ -118,7 +276,7 @@ func TestListProjects(t *testing.T) {
 			if req == nil {
 				req = &svcv1alpha1.ListProjectsRequest{}
 			}
-			svr := &server{client: client}
+			svr := &server{client: client, cfg: testCase.cfg}
 			res, err := svr.ListProjects(ctx, &connect.Request[svcv1alpha1.ListProjectsRequest]{
 				Msg: req,
 			})
@@ -203,6 +361,192 @@ func Test_server_listProjects(t *testing.T) {
 			},
 		},
 	)
+}
+
+func Test_collectAvailableLabels(t *testing.T) {
+	testCases := []struct {
+		name     string
+		projects []kargoapi.Project
+		prefixes []string
+		expected []string
+	}{
+		{
+			name:     "nil prefixes returns nil",
+			projects: []kargoapi.Project{{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"k": "v"}}}},
+			expected: nil,
+		},
+		{
+			name:     "empty prefixes returns nil",
+			projects: []kargoapi.Project{{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"k": "v"}}}},
+			prefixes: []string{},
+			expected: nil,
+		},
+		{
+			name: "collects matching labels sorted and deduped",
+			projects: []kargoapi.Project{
+				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"team.io/name": "platform",
+					"team.io/env":  "prod",
+					"other/key":    "ignored",
+				}}},
+				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"team.io/name": "backend",
+				}}},
+				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"team.io/name": "platform",
+				}}},
+			},
+			prefixes: []string{"team.io/"},
+			expected: []string{
+				"team.io/env=prod",
+				"team.io/name=backend",
+				"team.io/name=platform",
+			},
+		},
+		{
+			name: "multiple prefixes",
+			projects: []kargoapi.Project{
+				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"team.io/name": "platform",
+					"org.io/dept":  "eng",
+				}}},
+			},
+			prefixes: []string{"team.io/", "org.io/"},
+			expected: []string{
+				"org.io/dept=eng",
+				"team.io/name=platform",
+			},
+		},
+		{
+			name:     "no projects returns empty",
+			projects: nil,
+			prefixes: []string{"team.io/"},
+			expected: []string{},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := collectAvailableLabels(tc.projects, tc.prefixes)
+			if tc.expected == nil {
+				require.Nil(t, result)
+			} else {
+				require.Equal(t, tc.expected, result)
+			}
+		})
+	}
+}
+
+func Test_filterProjectsByLabels(t *testing.T) {
+	projects := []kargoapi.Project{
+		{ObjectMeta: metav1.ObjectMeta{
+			Name: "project-a",
+			Labels: map[string]string{
+				"team.io/name": "platform",
+				"team.io/env":  "prod",
+			},
+		}},
+		{ObjectMeta: metav1.ObjectMeta{
+			Name:   "project-b",
+			Labels: map[string]string{"team.io/name": "backend"},
+		}},
+		{ObjectMeta: metav1.ObjectMeta{
+			Name: "project-c",
+		}},
+	}
+	testCases := []struct {
+		name       string
+		wantLabels []string
+		expected   []string
+	}{
+		{
+			name:       "single label match",
+			wantLabels: []string{"team.io/name=platform"},
+			expected:   []string{"project-a"},
+		},
+		{
+			name:       "multiple labels AND logic",
+			wantLabels: []string{"team.io/name=platform", "team.io/env=prod"},
+			expected:   []string{"project-a"},
+		},
+		{
+			name:       "no match",
+			wantLabels: []string{"team.io/name=nonexistent"},
+			expected:   nil,
+		},
+		{
+			name:       "partial match fails AND",
+			wantLabels: []string{"team.io/name=backend", "team.io/env=prod"},
+			expected:   nil,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := filterProjectsByLabels(projects, tc.wantLabels)
+			names := make([]string, len(result))
+			for i, p := range result {
+				names[i] = p.Name
+			}
+			if tc.expected == nil {
+				require.Empty(t, result)
+			} else {
+				require.Equal(t, tc.expected, names)
+			}
+		})
+	}
+}
+
+func Test_projectHasAllLabels(t *testing.T) {
+	testCases := []struct {
+		name       string
+		labels     map[string]string
+		wantLabels []string
+		expected   bool
+	}{
+		{
+			name:       "all labels present",
+			labels:     map[string]string{"a": "1", "b": "2"},
+			wantLabels: []string{"a=1", "b=2"},
+			expected:   true,
+		},
+		{
+			name:       "missing key",
+			labels:     map[string]string{"a": "1"},
+			wantLabels: []string{"a=1", "b=2"},
+			expected:   false,
+		},
+		{
+			name:       "wrong value",
+			labels:     map[string]string{"a": "1", "b": "3"},
+			wantLabels: []string{"a=1", "b=2"},
+			expected:   false,
+		},
+		{
+			name:       "nil labels",
+			labels:     nil,
+			wantLabels: []string{"a=1"},
+			expected:   false,
+		},
+		{
+			name:       "empty want labels",
+			labels:     map[string]string{"a": "1"},
+			wantLabels: nil,
+			expected:   true,
+		},
+		{
+			name:       "label with empty value",
+			labels:     map[string]string{"a": ""},
+			wantLabels: []string{"a="},
+			expected:   true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.expected, projectHasAllLabels(tc.labels, tc.wantLabels))
+		})
+	}
 }
 
 func Test_filterProjectsByAccess(t *testing.T) {

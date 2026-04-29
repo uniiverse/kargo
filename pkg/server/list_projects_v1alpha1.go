@@ -32,35 +32,37 @@ func (s *server) ListProjects(
 		return strings.Compare(a.Name, b.Name)
 	})
 
-	var filtered []kargoapi.Project
 	if req.Msg.GetFilter() != "" {
 		filter := strings.ToLower(req.Msg.GetFilter())
-		for i := 0; i < len(list.Items); i++ {
-			if strings.Contains(strings.ToLower(list.Items[i].Name), filter) {
-				filtered = append(filtered, list.Items[i])
+		filtered := make([]kargoapi.Project, 0, len(list.Items))
+		for _, p := range list.Items {
+			if strings.Contains(strings.ToLower(p.Name), filter) {
+				filtered = append(filtered, p)
 			}
 		}
 		list.Items = filtered
 	}
 
 	if len(req.Msg.GetUid()) > 0 {
-		for i := 0; i < len(list.Items); i++ {
-			if slices.Contains(req.Msg.GetUid(), string(list.Items[i].UID)) {
-				filtered = append(filtered, list.Items[i])
+		filtered := make([]kargoapi.Project, 0, len(list.Items))
+		for _, p := range list.Items {
+			if slices.Contains(req.Msg.GetUid(), string(p.UID)) {
+				filtered = append(filtered, p)
 			}
 		}
 		list.Items = filtered
+	}
+
+	availableLabels := collectAvailableLabels(
+		list.Items, s.cfg.ProjectLabelPrefixes,
+	)
+
+	if len(req.Msg.GetLabels()) > 0 {
+		list.Items = filterProjectsByLabels(list.Items, req.Msg.GetLabels())
 	}
 
 	total := len(list.Items)
-	pageSize := len(list.Items)
-
-	// only the starred projects
-	if len(req.Msg.GetUid()) > 0 {
-		total = len(filtered)
-		pageSize = len(filtered)
-	}
-
+	pageSize := total
 	if req.Msg.GetPageSize() > 0 {
 		pageSize = int(req.Msg.GetPageSize())
 	}
@@ -69,7 +71,9 @@ func (s *server) ListProjects(
 	end := start + pageSize
 
 	if start >= len(list.Items) {
-		return connect.NewResponse(&svcv1alpha1.ListProjectsResponse{}), nil
+		return connect.NewResponse(&svcv1alpha1.ListProjectsResponse{
+			AvailableLabels: availableLabels,
+		}), nil
 	}
 
 	if end > len(list.Items) {
@@ -82,8 +86,9 @@ func (s *server) ListProjects(
 		projects[i] = &list.Items[i]
 	}
 	return connect.NewResponse(&svcv1alpha1.ListProjectsResponse{
-		Projects: projects,
-		Total:    int32(total), // nolint: gosec
+		Projects:        projects,
+		Total:           int32(total), // nolint: gosec
+		AvailableLabels: availableLabels,
 	}), nil
 }
 
@@ -131,4 +136,58 @@ func filterProjectsByAccess(
 		}
 	}
 	return filtered
+}
+
+// collectAvailableLabels returns a sorted, deduplicated slice of "key=value"
+// label strings from all projects, restricted to keys that begin with one of
+// the configured prefixes.
+func collectAvailableLabels(
+	projects []kargoapi.Project,
+	prefixes []string,
+) []string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, p := range projects {
+		for rawKey, val := range p.Labels {
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(rawKey, prefix) {
+					seen[rawKey+"="+val] = struct{}{}
+					break
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for kv := range seen {
+		result = append(result, kv)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// filterProjectsByLabels returns only those projects that have ALL of the
+// requested labels. Each entry in wantLabels is a "key=value" pair.
+func filterProjectsByLabels(
+	projects []kargoapi.Project,
+	wantLabels []string,
+) []kargoapi.Project {
+	filtered := make([]kargoapi.Project, 0, len(projects))
+	for _, p := range projects {
+		if projectHasAllLabels(p.Labels, wantLabels) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
+func projectHasAllLabels(labels map[string]string, wantLabels []string) bool {
+	for _, kv := range wantLabels {
+		key, val, _ := strings.Cut(kv, "=")
+		if v, ok := labels[key]; !ok || v != val {
+			return false
+		}
+	}
+	return true
 }

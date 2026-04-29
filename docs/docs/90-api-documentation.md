@@ -1100,6 +1100,7 @@ Stability is not guaranteed.
 | filter | [string](#string) |  filter specifies an optional filter expression for projects. |
 | uid | [string](#string) |  ui store starred projects uids, so it needs to filter it when looking at starred projects |
 | mine | [bool](#bool) |  When true, filter results to only projects where the authenticated user has been mapped to a ServiceAccount in the project's namespace. |
+| labels | [string](#string) |  labels filters projects to those having all of the specified labels. Each entry is a "key=value" pair. Projects must match all entries (AND logic). |
 
 <a name="akuity-io-kargo-service-v1alpha1-ListProjectsResponse"></a>
 
@@ -1109,6 +1110,7 @@ Stability is not guaranteed.
 | ----- | ---- | ----------- |
 | projects | [github.com.akuity.kargo.api.v1alpha1.Project](#github-com-akuity-kargo-api-v1alpha1-Project) |  projects is the list of Project resources matching the request criteria. |
 | total | [int32](#int32) |  total is the total number of projects available (across all pages). |
+| available_labels | [string](#string) |  available_labels is the sorted, deduplicated set of labels (as "key=value" pairs) present on any project in the result set before label filtering is applied. Only labels whose keys begin with a configured project label prefix are included. |
 
 <a name="akuity-io-kargo-service-v1alpha1-ListPromotionTasksRequest"></a>
 

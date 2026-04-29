@@ -692,6 +692,10 @@ message ListProjectsRequest {
   // When true, filter results to only projects where the authenticated user
   // has been mapped to a ServiceAccount in the project's namespace.
   optional bool mine = 5;
+  // labels filters projects to those having all of the specified labels.
+  // Each entry is a "key=value" pair. Projects must match all entries (AND
+  // logic).
+  repeated string labels = 6;
 }
 
 // ListProjectsResponse contains the list of projects and pagination information.
@@ -700,6 +704,11 @@ message ListProjectsResponse {
   repeated github.com.akuity.kargo.api.v1alpha1.Project projects = 1;
   // total is the total number of projects available (across all pages).
   int32 total = 2;
+  // available_labels is the sorted, deduplicated set of labels (as
+  // "key=value" pairs) present on any project in the result set before label
+  // filtering is applied. Only labels whose keys begin with a configured
+  // project label prefix are included.
+  repeated string available_labels = 3;
 }
 
 /* ProjectConfig Messages */

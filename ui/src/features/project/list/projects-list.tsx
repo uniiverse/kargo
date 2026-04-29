@@ -1,9 +1,8 @@
 import { useQuery } from '@connectrpc/connect-query';
 import { faStar, faUser } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-
-import { Button, Empty, Flex, Pagination, Select, Space, Tag, Tooltip } from 'antd';
-import { useEffect,useMemo, useState } from 'react';
+import { Empty, Flex, Pagination, Select, Space, Tag, Tooltip } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 
 import { LoadingState } from '@ui/features/common';
 import {
@@ -13,7 +12,7 @@ import {
 
 import { useLocalStorage } from '../../../utils/use-local-storage';
 
-import { collectUniqueLabels, matchesSelectedLabels } from './project-item/label-utils';
+import { wireLabelToDisplay } from './project-item/label-utils';
 import { ProjectItem } from './project-item/project-item';
 import { ProjectListFilter } from './project-list-filter';
 import * as styles from './projects-list.module.less';
@@ -43,7 +42,8 @@ export const ProjectsList = () => {
     page: page - 1,
     filter,
     uid: starredProjectsView ? starred : [],
-    mine: myProjectsView || undefined
+    mine: myProjectsView || undefined,
+    labels: selectedLabels
   });
 
   useEffect(() => {
@@ -62,28 +62,25 @@ export const ProjectsList = () => {
     setPage(1);
   };
 
+  const handleLabelChange = (labels: string[]) => {
+    setSelectedLabels(labels);
+    setPage(1);
+  };
+
   const availableLabels = useMemo(
     () =>
-      collectUniqueLabels(
-        (data?.projects ?? []).map((p) => p.metadata?.labels ?? {}),
-        projectLabelPrefixes
-      ),
-    [data?.projects, projectLabelPrefixes]
-  );
-
-  const filteredProjects = useMemo(
-    () =>
-      (data?.projects ?? []).filter((p) =>
-        matchesSelectedLabels(p.metadata?.labels ?? {}, projectLabelPrefixes, selectedLabels)
-      ),
-    [data?.projects, projectLabelPrefixes, selectedLabels]
+      (data?.availableLabels ?? []).map((wire) => ({
+        label: wireLabelToDisplay(wire, projectLabelPrefixes),
+        value: wire
+      })),
+    [data?.availableLabels, projectLabelPrefixes]
   );
 
   if (isLoading) return <LoadingState />;
 
   const isEmpty = !data || data.projects.length === 0;
 
-  if (isEmpty) {
+  if (isEmpty && selectedLabels.length === 0) {
     return (
       <>
         <Flex align='center' className='mb-20' gap={8}>
@@ -133,9 +130,9 @@ export const ProjectsList = () => {
             mode='multiple'
             allowClear
             placeholder='Filter by labels'
-            options={availableLabels.map((label) => ({ label, value: label }))}
+            options={availableLabels}
             value={selectedLabels}
-            onChange={setSelectedLabels}
+            onChange={handleLabelChange}
             className='min-w-48 max-w-96'
             maxTagCount='responsive'
           />
@@ -170,7 +167,7 @@ export const ProjectsList = () => {
       ) : (
         <>
           <div className={styles.list}>
-            {filteredProjects.map((proj) => (
+            {(data?.projects ?? []).map((proj) => (
               <ProjectItem
                 key={proj?.metadata?.name}
                 project={proj}

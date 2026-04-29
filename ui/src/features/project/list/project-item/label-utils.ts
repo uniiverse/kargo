@@ -74,3 +74,23 @@ export function matchesSelectedLabels(
   const projectLabels = new Set(filterLabelsByPrefixes(labels, prefixes).map(formatLabel));
   return selectedLabels.every((label) => projectLabels.has(label));
 }
+
+/**
+ * Converts a wire-format label ("rawkey=value") to a display string by
+ * stripping the first matching prefix from the key and formatting as
+ * "strippedKey: value".
+ */
+export function wireLabelToDisplay(wire: string, prefixes: string[]): string {
+  const eqIdx = wire.indexOf('=');
+  if (eqIdx === -1) {
+    return wire;
+  }
+  const rawKey = wire.slice(0, eqIdx);
+  const value = wire.slice(eqIdx + 1);
+  for (const prefix of prefixes) {
+    if (rawKey.startsWith(prefix)) {
+      return formatLabel({ key: rawKey.slice(prefix.length), value });
+    }
+  }
+  return formatLabel({ key: rawKey, value });
+}
