@@ -201,7 +201,7 @@ data:
 			},
 		},
 		{
-			name: "no annotated ConfigMap",
+			name: "no annotated ConfigMap passes through without error",
 			setupFiles: func(t *testing.T, dir string) {
 				content := `apiVersion: v1
 kind: ConfigMap
@@ -219,8 +219,37 @@ data:
 				InPath:  "input.yaml",
 				OutPath: "output.yaml",
 			},
+			assertions: func(t *testing.T, dir string, result promotion.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, kargoapi.PromotionStepStatusSucceeded, result.Status)
+
+				b, readErr := os.ReadFile(filepath.Join(dir, "output.yaml"))
+				require.NoError(t, readErr)
+				assert.Contains(t, string(b), "key: value")
+			},
+		},
+		{
+			name: "no annotated ConfigMap but placeholders remain causes failure",
+			setupFiles: func(t *testing.T, dir string) {
+				content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-config
+data:
+  host: REPLACE_ME[CLUSTER_NAME]
+`
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "input.yaml"),
+					[]byte(content), 0o600,
+				))
+			},
+			config: builtin.StringReplacerConfig{
+				InPath:  "input.yaml",
+				OutPath: "output.yaml",
+			},
 			assertions: func(t *testing.T, _ string, result promotion.StepResult, err error) {
-				require.ErrorContains(t, err, "no ConfigMap with annotation")
+				require.ErrorContains(t, err, "unreplaced placeholders remain")
+				require.ErrorContains(t, err, "REPLACE_ME[CLUSTER_NAME]")
 				assert.Equal(t, kargoapi.PromotionStepStatusErrored, result.Status)
 			},
 		},
@@ -497,11 +526,11 @@ func Test_extractReplacements(t *testing.T) {
 			expectedKeys: []string{"FOO"},
 		},
 		{
-			name: "no annotated ConfigMap",
+			name: "no annotated ConfigMap returns nil",
 			docs: [][]byte{
 				[]byte("kind: ConfigMap\ndata:\n  FOO: bar\n"),
 			},
-			expectErr: "no ConfigMap with annotation",
+			expectedKeys: nil,
 		},
 		{
 			name: "multiple annotated ConfigMaps",
