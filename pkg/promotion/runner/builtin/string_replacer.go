@@ -93,13 +93,15 @@ func (s *stringReplacer) run(
 
 	docs := splitYAMLDocuments(raw)
 
-	replacements, err := extractReplacements(docs)
+	cmReplacements, err := extractReplacements(docs)
 	if err != nil {
 		return promotion.StepResult{Status: kargoapi.PromotionStepStatusErrored}, err
 	}
 
+	replacements := mergeReplacements(cmReplacements, cfg.Replacements)
+
 	var result [][]byte
-	if replacements != nil {
+	if len(replacements) > 0 {
 		result = applyReplacements(docs, replacements)
 	} else {
 		result = docs
@@ -228,6 +230,24 @@ func applyReplacements(
 		result[i] = []byte(s)
 	}
 	return result
+}
+
+// mergeReplacements combines replacements sourced from an annotated ConfigMap
+// with inline replacements supplied via step config. Inline replacements take
+// precedence on key collisions. It returns nil when both sources are empty so
+// callers can skip substitution entirely.
+func mergeReplacements(configMap, inline map[string]string) map[string]string {
+	if len(configMap) == 0 && len(inline) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(configMap)+len(inline))
+	for key, value := range configMap {
+		merged[key] = value
+	}
+	for key, value := range inline {
+		merged[key] = value
+	}
+	return merged
 }
 
 const placeholderPrefix = "REPLACE_ME["
