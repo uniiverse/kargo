@@ -59,6 +59,17 @@ func Test_stringReplacer_convert(t *testing.T) {
 			},
 			expectedProblems: nil,
 		},
+		{
+			name: "valid config with inline replacements",
+			config: promotion.Config{
+				"inPath":  "/input.yaml",
+				"outPath": "/output.yaml",
+				"replacements": map[string]any{
+					"FREIGHT_SHA": "a1b2c3d",
+				},
+			},
+			expectedProblems: nil,
+		},
 	}
 
 	r := newStringReplacer(promotion.StepRunnerCapabilities{})
@@ -458,6 +469,122 @@ data:
 				assert.NotContains(t, output, "REPLACE_ME")
 			},
 		},
+		{
+			name: "inline replacements applied without a ConfigMap",
+			setupFiles: func(t *testing.T, dir string) {
+				content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  version: REPLACE_ME[FREIGHT_SHA]
+`
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "input.yaml"),
+					[]byte(content), 0o600,
+				))
+			},
+			config: builtin.StringReplacerConfig{
+				InPath:       "input.yaml",
+				OutPath:      "output.yaml",
+				Replacements: map[string]string{"FREIGHT_SHA": "a1b2c3d"},
+			},
+			assertions: func(t *testing.T, dir string, result promotion.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, kargoapi.PromotionStepStatusSucceeded, result.Status)
+
+				b, readErr := os.ReadFile(filepath.Join(dir, "output.yaml"))
+				require.NoError(t, readErr)
+				output := string(b)
+				assert.Contains(t, output, "version: a1b2c3d")
+				assert.NotContains(t, output, "REPLACE_ME")
+			},
+		},
+		{
+			name: "inline replacements merged with ConfigMap",
+			setupFiles: func(t *testing.T, dir string) {
+				content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: replacements
+  annotations:
+    universe.engineer/string-replacer: "true"
+data:
+  CLUSTER_NAME: prod-us-east1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  cluster: REPLACE_ME[CLUSTER_NAME]
+  version: REPLACE_ME[FREIGHT_SHA]
+`
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "input.yaml"),
+					[]byte(content), 0o600,
+				))
+			},
+			config: builtin.StringReplacerConfig{
+				InPath:       "input.yaml",
+				OutPath:      "output.yaml",
+				Replacements: map[string]string{"FREIGHT_SHA": "a1b2c3d"},
+			},
+			assertions: func(t *testing.T, dir string, result promotion.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, kargoapi.PromotionStepStatusSucceeded, result.Status)
+
+				b, readErr := os.ReadFile(filepath.Join(dir, "output.yaml"))
+				require.NoError(t, readErr)
+				output := string(b)
+				assert.Contains(t, output, "cluster: prod-us-east1")
+				assert.Contains(t, output, "version: a1b2c3d")
+				assert.NotContains(t, output, "REPLACE_ME")
+			},
+		},
+		{
+			name: "inline replacement overrides ConfigMap on key collision",
+			setupFiles: func(t *testing.T, dir string) {
+				content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: replacements
+  annotations:
+    universe.engineer/string-replacer: "true"
+data:
+  TOKEN: from-configmap
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  token: REPLACE_ME[TOKEN]
+`
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "input.yaml"),
+					[]byte(content), 0o600,
+				))
+			},
+			config: builtin.StringReplacerConfig{
+				InPath:       "input.yaml",
+				OutPath:      "output.yaml",
+				Replacements: map[string]string{"TOKEN": "from-inline"},
+			},
+			assertions: func(t *testing.T, dir string, result promotion.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, kargoapi.PromotionStepStatusSucceeded, result.Status)
+
+				b, readErr := os.ReadFile(filepath.Join(dir, "output.yaml"))
+				require.NoError(t, readErr)
+				output := string(b)
+				// The annotated ConfigMap is preserved in the output, so its
+				// own `TOKEN: from-configmap` data entry remains — assert on the
+				// substituted line specifically rather than the raw value.
+				assert.Contains(t, output, "token: from-inline")
+				assert.NotContains(t, output, "token: from-configmap")
+			},
+		},
 	}
 
 	runner := &stringReplacer{}
@@ -625,6 +752,47 @@ func Test_findUnreplacedPlaceholders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := findUnreplacedPlaceholders(tt.docs)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func Test_mergeReplacements(t *testing.T) {
+	tests := []struct {
+		name      string
+		configMap map[string]string
+		inline    map[string]string
+		expected  map[string]string
+	}{
+		{
+			name:     "both empty returns nil",
+			expected: nil,
+		},
+		{
+			name:      "ConfigMap only",
+			configMap: map[string]string{"A": "1"},
+			expected:  map[string]string{"A": "1"},
+		},
+		{
+			name:     "inline only",
+			inline:   map[string]string{"B": "2"},
+			expected: map[string]string{"B": "2"},
+		},
+		{
+			name:      "disjoint keys are merged",
+			configMap: map[string]string{"A": "1"},
+			inline:    map[string]string{"B": "2"},
+			expected:  map[string]string{"A": "1", "B": "2"},
+		},
+		{
+			name:      "inline wins on collision",
+			configMap: map[string]string{"A": "from-configmap"},
+			inline:    map[string]string{"A": "from-inline"},
+			expected:  map[string]string{"A": "from-inline"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, mergeReplacements(tt.configMap, tt.inline))
 		})
 	}
 }
