@@ -714,12 +714,18 @@ type Update struct {
 
 type StringReplacerConfig struct {
 	// InPath is the path to a YAML file containing Kubernetes manifests. The file may contain
-	// multiple documents separated by '---'. One of the documents must be a ConfigMap with the
-	// annotation universe.engineer/string-replacer: "true" whose data entries drive the string
+	// multiple documents separated by '---'. One of the documents may be a ConfigMap annotated
+	// with universe.engineer/string-replacer: "true" whose data entries drive the string
 	// substitutions.
 	InPath string `json:"inPath"`
-	// OutPath is the path to write the resulting YAML after replacements have been applied.
+	// OutPath is the path to write the resulting YAML after replacements have been applied. The
+	// annotated ConfigMap is preserved in the output.
 	OutPath string `json:"outPath"`
+	// Replacements is an optional map of KEY to value, each applied as a REPLACE_ME[KEY] ->
+	// value substitution across all documents. Entries are merged with those from the annotated
+	// ConfigMap; on a key collision the inline value here wins. Use this for values not known
+	// until promotion time, such as the freight commit SHA.
+	Replacements map[string]string `json:"replacements,omitempty"`
 }
 
 type TOMLParseConfig struct {
