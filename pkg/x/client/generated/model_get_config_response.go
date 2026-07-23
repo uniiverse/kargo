@@ -22,6 +22,7 @@ type GetConfigResponse struct {
 	ArgocdShards *map[string]ArgoCDShard `json:"argocdShards,omitempty"`
 	HasAnalysisRunLogsUrlTemplate *bool `json:"hasAnalysisRunLogsUrlTemplate,omitempty"`
 	KargoNamespace *string `json:"kargoNamespace,omitempty"`
+	ProjectLabelPrefixes []string `json:"projectLabelPrefixes,omitempty"`
 	SecretManagementEnabled *bool `json:"secretManagementEnabled,omitempty"`
 	SharedResourcesNamespace *string `json:"sharedResourcesNamespace,omitempty"`
 	SystemResourcesNamespace *string `json:"systemResourcesNamespace,omitempty"`
@@ -140,6 +141,38 @@ func (o *GetConfigResponse) SetKargoNamespace(v string) {
 	o.KargoNamespace = &v
 }
 
+// GetProjectLabelPrefixes returns the ProjectLabelPrefixes field value if set, zero value otherwise.
+func (o *GetConfigResponse) GetProjectLabelPrefixes() []string {
+	if o == nil || IsNil(o.ProjectLabelPrefixes) {
+		var ret []string
+		return ret
+	}
+	return o.ProjectLabelPrefixes
+}
+
+// GetProjectLabelPrefixesOk returns a tuple with the ProjectLabelPrefixes field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *GetConfigResponse) GetProjectLabelPrefixesOk() ([]string, bool) {
+	if o == nil || IsNil(o.ProjectLabelPrefixes) {
+		return nil, false
+	}
+	return o.ProjectLabelPrefixes, true
+}
+
+// HasProjectLabelPrefixes returns a boolean if a field has been set.
+func (o *GetConfigResponse) HasProjectLabelPrefixes() bool {
+	if o != nil && !IsNil(o.ProjectLabelPrefixes) {
+		return true
+	}
+
+	return false
+}
+
+// SetProjectLabelPrefixes gets a reference to the given []string and assigns it to the ProjectLabelPrefixes field.
+func (o *GetConfigResponse) SetProjectLabelPrefixes(v []string) {
+	o.ProjectLabelPrefixes = v
+}
+
 // GetSecretManagementEnabled returns the SecretManagementEnabled field value if set, zero value otherwise.
 func (o *GetConfigResponse) GetSecretManagementEnabled() bool {
 	if o == nil || IsNil(o.SecretManagementEnabled) {
@@ -254,6 +287,9 @@ func (o GetConfigResponse) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.KargoNamespace) {
 		toSerialize["kargoNamespace"] = o.KargoNamespace
+	}
+	if !IsNil(o.ProjectLabelPrefixes) {
+		toSerialize["projectLabelPrefixes"] = o.ProjectLabelPrefixes
 	}
 	if !IsNil(o.SecretManagementEnabled) {
 		toSerialize["secretManagementEnabled"] = o.SecretManagementEnabled
