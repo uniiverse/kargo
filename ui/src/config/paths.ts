@@ -9,6 +9,7 @@ export const paths = {
   promotion: '/project/:name/promotion/:promotionId',
   promote: '/project/:name/promote/freight/:freight/stage/:stage',
   freight: '/project/:name/freight/:freightName',
+  freightFor: '/project/:name/freightFor/:shortSha',
   createStage: '/project/:name/create-stage',
   createWarehouse: '/project/:name/create-warehouse',
   projectSettings: '/project/:name/settings',
