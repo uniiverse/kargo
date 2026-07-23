@@ -3557,6 +3557,9 @@ components:
             url: url
         hasAnalysisRunLogsUrlTemplate: true
         kargoNamespace: kargoNamespace
+        projectLabelPrefixes:
+        - projectLabelPrefixes
+        - projectLabelPrefixes
         secretManagementEnabled: true
         sharedResourcesNamespace: sharedResourcesNamespace
         systemResourcesNamespace: systemResourcesNamespace
@@ -3569,6 +3572,10 @@ components:
           type: boolean
         kargoNamespace:
           type: string
+        projectLabelPrefixes:
+          items:
+            type: string
+          type: array
         secretManagementEnabled:
           type: boolean
         sharedResourcesNamespace:
