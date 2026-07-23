@@ -16,6 +16,7 @@ import { AuthContextProvider } from './features/auth/context/auth-context-provid
 import { ProtectedRoute } from './features/auth/protected-route';
 import { TokenRenew } from './features/auth/token-renew';
 import { MainLayout } from './features/common/layout/main-layout';
+import { FreightForRedirect } from './features/freight/freight-for-redirect';
 import { Events } from './features/project/events/events';
 import { ProjectSettings } from './features/project/settings/project-settings';
 import { AnalysisRunLogsPage } from './pages/analysis-run-logs';
@@ -43,6 +44,7 @@ export const App = () => (
                 <Route path={paths.promotion} element={<Project />} />
                 <Route path={paths.promote} element={<Project />} />
                 <Route path={paths.freight} element={<Project />} />
+                <Route path={paths.freightFor} element={<FreightForRedirect />} />
                 <Route path={paths.warehouse} element={<Project />} />
                 <Route path={paths.downloads} element={<Downloads />} />
                 <Route path={paths.user} element={<User />} />
