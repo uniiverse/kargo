@@ -153,7 +153,7 @@ test-unit: install-helm
 		for mod in $$(find . -maxdepth 5 -type f -name 'go.mod' | grep -v tools); do \
 			echo "Testing $$(dirname $${mod}) ..."; \
 			cd $$(dirname $${mod}); \
-			PATH=$(EXTENDED_PATH) go test \
+			PATH="$(EXTENDED_PATH)" go test \
 				-v \
 				-timeout=300s \
 				-race \
