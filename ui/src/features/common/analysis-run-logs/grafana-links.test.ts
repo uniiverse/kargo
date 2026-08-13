@@ -82,7 +82,38 @@ describe('buildDashboardUrl', () => {
 });
 
 describe('buildExploreUrl', () => {
-  test('placeholder stub returns undefined', () => {
-    expect(buildExploreUrl(completedRun(), 'availability-check')).toBeUndefined();
+  test('builds a Loki Explore URL scoped to the promotion pod and window', () => {
+    const url = buildExploreUrl(completedRun(), 'availability-check');
+    expect(url).toBeDefined();
+
+    const parsed = new URL(url!);
+    expect(parsed.origin + parsed.pathname).toBe(
+      'https://monitoring.us-east4.production.universe.engineer/explore'
+    );
+
+    const left = JSON.parse(parsed.searchParams.get('left')!);
+    expect(left.queries[0].expr).toBe(
+      '{cluster="platform-us-east4", namespace="kargo-platform-guinea-pig"} | pod=~"ar-1.availability-check.1.*"'
+    );
+    expect(left.queries[0].datasource.uid).toBe('loki');
+    expect(left.datasource).toBe('loki');
+    expect(left.range).toEqual({ from: '1786615200000', to: '1786615500000' });
+  });
+
+  test("uses 'now' as the upper bound for an in-flight run", () => {
+    const run = completedRun();
+    delete run.status!.completedAt;
+
+    const exploreUrl = buildExploreUrl(run, 'availability-check');
+    const left = JSON.parse(new URL(exploreUrl!).searchParams.get('left')!);
+    expect(left.range.to).toBe('now');
+  });
+
+  test('returns undefined when the metric result is not populated', () => {
+    const run: RolloutsAnalysisRun = {
+      metadata: { name: 'ar-2', namespace: 'kargo-platform-guinea-pig' },
+      status: { startedAt: '2026-08-13T10:00:00Z', metricResults: [] }
+    };
+    expect(buildExploreUrl(run, 'availability-check')).toBeUndefined();
   });
 });

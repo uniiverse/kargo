@@ -1,8 +1,6 @@
 import {
   GRAFANA_URL,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   LOKI_DATASOURCE_UID,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   VERIFICATION_CLUSTER,
   VERIFICATION_DASHBOARD_UID
 } from '@ui/config/grafana';
@@ -53,6 +51,11 @@ function jobContext(
   return { jobName, jobNamespace, fromMs, toMs };
 }
 
+/** Grafana time value: an epoch-ms string, or 'now' for an open-ended (in-flight) run. */
+function grafanaTime(ms: number | undefined): string {
+  return ms === undefined ? 'now' : String(ms);
+}
+
 /**
  * A per-promotion link to the curated Grafana dashboard. The dashboard's `job`
  * and `namespace` template vars are set from the AnalysisRun's job identity;
@@ -71,19 +74,53 @@ export const buildDashboardUrl = (
     'var-job': ctx.jobName,
     'var-namespace': ctx.jobNamespace,
     from: String(ctx.fromMs),
-    to: ctx.toMs === undefined ? 'now' : String(ctx.toMs)
+    to: grafanaTime(ctx.toMs)
   });
 
   return `${GRAFANA_URL}/d/${VERIFICATION_DASHBOARD_UID}?${params.toString()}`;
 };
 
 /**
- * Placeholder — implemented in Task 3.
- * LOKI_DATASOURCE_UID and VERIFICATION_CLUSTER are used by Task 3's implementation.
+ * A per-promotion link to Grafana Explore for ad-hoc log work (widen the
+ * window, add line filters, pivot). Encodes Grafana's `left` querystring: the
+ * Loki datasource, a LogQL query pinned to the promotion pod, and the run's
+ * time range.
+ *
+ * The `?left=<json>` schema is a Grafana-versioned contract (stable within v12,
+ * our prod version) — the dashboard link is the primary affordance precisely
+ * because it hides this behind a stable /d/<uid> URL.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const buildExploreUrl = (
-  _run: RolloutsAnalysisRun | undefined,
-  _metricName: string
-): string | undefined => undefined;
-/* eslint-enable @typescript-eslint/no-unused-vars */
+  run: RolloutsAnalysisRun | undefined,
+  metricName: string
+): string | undefined => {
+  const ctx = jobContext(run, metricName);
+  if (!ctx) {
+    return undefined;
+  }
+
+  // Unescaped '.' in the pod regex is intentional: matches the deployed inline
+  // query in chart-values.yaml (#3114) so the deep-link and Kargo's inline log
+  // view use identical LogQL. Job names are DNS-label-safe, so false matches
+  // can't occur in practice.
+  const expr =
+    `{cluster="${VERIFICATION_CLUSTER}", namespace="${ctx.jobNamespace}"} ` +
+    `| pod=~"${ctx.jobName}.*"`;
+
+  const left = {
+    datasource: LOKI_DATASOURCE_UID,
+    queries: [
+      {
+        refId: 'A',
+        datasource: { type: 'loki', uid: LOKI_DATASOURCE_UID },
+        expr
+      }
+    ],
+    range: {
+      from: String(ctx.fromMs),
+      to: grafanaTime(ctx.toMs)
+    }
+  };
+
+  return `${GRAFANA_URL}/explore?left=${encodeURIComponent(JSON.stringify(left))}`;
+};
