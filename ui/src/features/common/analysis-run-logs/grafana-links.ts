@@ -86,9 +86,11 @@ export const buildDashboardUrl = (
  * Loki datasource, a LogQL query pinned to the promotion pod, and the run's
  * time range.
  *
- * The `?left=<json>` schema is a Grafana-versioned contract (stable within v12,
- * our prod version) — the dashboard link is the primary affordance precisely
- * because it hides this behind a stable /d/<uid> URL.
+ * The `?left=<json>` schema is a Grafana-versioned contract. It is validated
+ * against Grafana v12 (our prod version); a major Grafana upgrade can change
+ * the Explore state encoding and silently break this link. The dashboard link
+ * is the primary affordance precisely because it hides this behind a stable
+ * /d/<uid> URL. If prod Grafana moves past v12, re-verify this encoding.
  */
 export const buildExploreUrl = (
   run: RolloutsAnalysisRun | undefined,

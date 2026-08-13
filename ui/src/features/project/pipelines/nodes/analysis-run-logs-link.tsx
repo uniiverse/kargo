@@ -28,8 +28,13 @@ export const AnalysisRunLogsLink = (props: AnalysisRunLogsLinkProps) => {
   // on-call reads green-run logs too, not just failures. The "not currently
   // Promoting" guard above already hides it mid-promotion.
   const analysisRunName = recentVerification?.analysisRun?.name;
+  // All terminal AnalysisRun phases — on-call reads logs for errored and
+  // inconclusive runs too, not just clean pass/fail.
   const completed =
-    recentVerification?.phase === 'Successful' || recentVerification?.phase === 'Failed';
+    recentVerification?.phase === 'Successful' ||
+    recentVerification?.phase === 'Failed' ||
+    recentVerification?.phase === 'Inconclusive' ||
+    recentVerification?.phase === 'Error';
 
   if (!completed || !analysisRunName) {
     return null;
