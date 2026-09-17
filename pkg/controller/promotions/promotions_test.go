@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	kargoapi "github.com/akuity/kargo/api/v1alpha1"
 	k8sevent "github.com/akuity/kargo/pkg/event/kubernetes"
@@ -44,6 +47,7 @@ func TestNewPromotionReconciler(t *testing.T) {
 	require.NotNil(t, r.getStageFn)
 	require.NotNil(t, r.promoteFn)
 	require.NotNil(t, r.cleanupWorkDirFn)
+	require.NotNil(t, r.recordPromotionFn)
 }
 
 func newFakeReconciler(
@@ -86,13 +90,18 @@ func TestReconcile(t *testing.T) {
 		expectedPhase           kargoapi.PromotionPhase
 		expectedEventRecorded   bool
 		expectedEventType       kargoapi.EventType
+		// expectedRecordedPhases lists the phases the metrics recording
+		// function is expected to be invoked with, in order. Nil/empty means
+		// it should not be called at all.
+		expectedRecordedPhases []kargoapi.PromotionPhase
 	}{
 		{
-			name:                  "normal reconcile",
-			expectPromoteFnCalled: true,
-			expectedPhase:         kargoapi.PromotionPhaseSucceeded,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionSucceeded,
+			name:                   "normal reconcile",
+			expectPromoteFnCalled:  true,
+			expectedPhase:          kargoapi.PromotionPhaseSucceeded,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionSucceeded,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseSucceeded},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -148,11 +157,12 @@ func TestReconcile(t *testing.T) {
 			apiReader: assertNotCalledReader(t),
 		},
 		{
-			name:                  "promo already running",
-			expectPromoteFnCalled: true,
-			expectedPhase:         kargoapi.PromotionPhaseSucceeded,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionSucceeded,
+			name:                   "promo already running",
+			expectPromoteFnCalled:  true,
+			expectedPhase:          kargoapi.PromotionPhaseSucceeded,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionSucceeded,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseSucceeded},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -191,12 +201,13 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name:                  "promo has highest priority",
-			expectPromoteFnCalled: true,
-			promoToReconcile:      &types.NamespacedName{Namespace: "fake-namespace", Name: "fake-promo1"},
-			expectedPhase:         kargoapi.PromotionPhaseSucceeded,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionSucceeded,
+			name:                   "promo has highest priority",
+			expectPromoteFnCalled:  true,
+			promoToReconcile:       &types.NamespacedName{Namespace: "fake-namespace", Name: "fake-promo1"},
+			expectedPhase:          kargoapi.PromotionPhaseSucceeded,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionSucceeded,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseSucceeded},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -235,11 +246,12 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name:                  "terminal promotion event stage lookup returns real error",
-			expectPromoteFnCalled: true,
-			promoToReconcile:      &types.NamespacedName{Namespace: "fake-namespace", Name: "fake-promo"},
-			expectedErr:           "get stage: expected stage lookup error",
-			expectedPhase:         kargoapi.PromotionPhaseSucceeded,
+			name:                   "terminal promotion event stage lookup returns real error",
+			expectPromoteFnCalled:  true,
+			promoToReconcile:       &types.NamespacedName{Namespace: "fake-namespace", Name: "fake-promo"},
+			expectedErr:            "get stage: expected stage lookup error",
+			expectedPhase:          kargoapi.PromotionPhaseSucceeded,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseSucceeded},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -280,11 +292,12 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name:                  "promoteFn panics",
-			expectPromoteFnCalled: true,
-			expectedPhase:         kargoapi.PromotionPhaseErrored,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionErrored,
+			name:                   "promoteFn panics",
+			expectPromoteFnCalled:  true,
+			expectedPhase:          kargoapi.PromotionPhaseErrored,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionErrored,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseErrored},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -309,11 +322,12 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name:                  "promoteFn errors",
-			expectPromoteFnCalled: true,
-			expectedPhase:         kargoapi.PromotionPhaseErrored,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionErrored,
+			name:                   "promoteFn errors",
+			expectPromoteFnCalled:  true,
+			expectedPhase:          kargoapi.PromotionPhaseErrored,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionErrored,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseErrored},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -343,11 +357,12 @@ func TestReconcile(t *testing.T) {
 			// the authoritative state reflecting steps already completed. The
 			// reconciler must use the API data so it resumes from the correct
 			// step rather than re-executing from step 0.
-			name:                  "stale cache: cache has no step metadata, API has current state",
-			expectPromoteFnCalled: true,
-			expectedPhase:         kargoapi.PromotionPhaseSucceeded,
-			expectedEventRecorded: true,
-			expectedEventType:     kargoapi.EventTypePromotionSucceeded,
+			name:                   "stale cache: cache has no step metadata, API has current state",
+			expectPromoteFnCalled:  true,
+			expectedPhase:          kargoapi.PromotionPhaseSucceeded,
+			expectedEventRecorded:  true,
+			expectedEventType:      kargoapi.EventTypePromotionSucceeded,
+			expectedRecordedPhases: []kargoapi.PromotionPhase{kargoapi.PromotionPhaseSucceeded},
 			promos: []client.Object{
 				&kargoapi.Stage{
 					ObjectMeta: metav1.ObjectMeta{
@@ -451,6 +466,15 @@ func TestReconcile(t *testing.T) {
 				}, nil, nil
 			}
 
+			var recordedPhases []kargoapi.PromotionPhase
+			r.recordPromotionFn = func(
+				_ *kargoapi.Promotion,
+				status *kargoapi.PromotionStatus,
+				_ *kargoapi.Freight,
+			) {
+				recordedPhases = append(recordedPhases, status.Phase)
+			}
+
 			terminateWasCalled := false
 			r.terminatePromotionFn = func(
 				_ context.Context,
@@ -488,6 +512,7 @@ func TestReconcile(t *testing.T) {
 				"promoteFn called: %t, expected %t", promoteWasCalled, tc.expectPromoteFnCalled)
 			require.Equal(t, tc.expectTerminateFnCalled, terminateWasCalled,
 				"terminateFn called: %t, expected %t", terminateWasCalled, tc.expectTerminateFnCalled)
+			require.Equal(t, tc.expectedRecordedPhases, recordedPhases)
 
 			if tc.expectedPhase != "" {
 				var updatedPromo kargoapi.Promotion
@@ -503,6 +528,66 @@ func TestReconcile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test_reconciler_recordPromotion_skipsOnPrimaryPatchFailure asserts that
+// metrics are not recorded when the terminal-phase status patch fails, since
+// a Prometheus counter cannot tolerate the at-least-once duplication that a
+// subsequent retry of a durably-failed patch would otherwise cause.
+func Test_reconciler_recordPromotion_skipsOnPrimaryPatchFailure(t *testing.T) {
+	scheme := k8sruntime.NewScheme()
+	require.NoError(t, kargoapi.SchemeBuilder.AddToScheme(scheme))
+
+	stage := &kargoapi.Stage{
+		ObjectMeta: metav1.ObjectMeta{Name: "fake-stage", Namespace: "fake-namespace"},
+		Status: kargoapi.StageStatus{
+			CurrentPromotion: &kargoapi.PromotionReference{Name: "fake-promo"},
+		},
+	}
+	promo := newPromo("fake-namespace", "fake-promo", "fake-stage", kargoapi.PromotionPhasePending, now)
+
+	var patchCalls int
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stage, promo).
+		WithStatusSubresource(&kargoapi.Promotion{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context,
+				c client.Client,
+				subResourceName string,
+				obj client.Object,
+				patch client.Patch,
+				opts ...client.SubResourcePatchOption,
+			) error {
+				patchCalls++
+				// Let the Pending -> Running transition through, but fail the
+				// patch that would persist the terminal Succeeded phase.
+				if patchCalls > 1 {
+					return errors.New("simulated patch failure")
+				}
+				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	recorder := fakeevent.NewEventRecorder(1)
+	r := newReconciler(c, c, k8sevent.NewEventSender(recorder), &promotion.MockEngine{}, ReconcilerConfig{})
+	r.promoteFn = func(
+		context.Context, kargoapi.Promotion, *kargoapi.Stage, *kargoapi.Freight,
+	) (*kargoapi.PromotionStatus, *time.Duration, error) {
+		return &kargoapi.PromotionStatus{Phase: kargoapi.PromotionPhaseSucceeded}, nil, nil
+	}
+	var recordCalled bool
+	r.recordPromotionFn = func(*kargoapi.Promotion, *kargoapi.PromotionStatus, *kargoapi.Freight) {
+		recordCalled = true
+	}
+
+	_, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "fake-namespace", Name: "fake-promo"},
+	})
+	require.ErrorContains(t, err, "simulated patch failure")
+	require.False(t, recordCalled, "metrics must not be recorded when the terminal status patch fails")
 }
 
 func Test_reconciler_terminatePromotion(t *testing.T) {
@@ -661,6 +746,9 @@ func Test_reconciler_terminatePromotion(t *testing.T) {
 				cleanupWorkDirFn: func(context.Context, types.UID) {
 					// no-op for tests
 				},
+				recordPromotionFn: func(*kargoapi.Promotion, *kargoapi.PromotionStatus, *kargoapi.Freight) {
+					// no-op for tests
+				},
 			}
 
 			req := tt.req
@@ -795,6 +883,9 @@ func Test_reconciler_terminatePromotion_cleansUpWorkDir(t *testing.T) {
 		sender:      k8sevent.NewEventSender(recorder),
 		cleanupWorkDirFn: func(context.Context, types.UID) {
 			cleanupCalled = true
+		},
+		recordPromotionFn: func(*kargoapi.Promotion, *kargoapi.PromotionStatus, *kargoapi.Freight) {
+			// no-op for tests
 		},
 	}
 
@@ -1149,6 +1240,152 @@ func newPromo(namespace, name, stage string,
 		Status: kargoapi.PromotionStatus{
 			Phase: phase,
 		},
+	}
+}
+
+// findMetricSample locates, within the named metric family gathered from
+// controller-runtime's default metrics registry (the same registry
+// pkg/metrics records to), the sample whose labels exactly match wantLabels.
+// It returns nil if no such sample exists.
+func findMetricSample(t *testing.T, family string, wantLabels map[string]string) *dto.Metric {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		if mf.GetName() != family {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			gotLabels := make(map[string]string, len(m.GetLabel()))
+			for _, l := range m.GetLabel() {
+				gotLabels[l.GetName()] = l.GetValue()
+			}
+			match := len(gotLabels) == len(wantLabels)
+			if match {
+				for k, v := range wantLabels {
+					if gotLabels[k] != v {
+						match = false
+						break
+					}
+				}
+			}
+			if match {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+func Test_reconciler_recordPromotion(t *testing.T) {
+	testCases := []struct {
+		name    string
+		promo   *kargoapi.Promotion
+		status  *kargoapi.PromotionStatus
+		freight *kargoapi.Freight
+		assert  func(*testing.T, string /* project */, string /* stage */)
+	}{
+		{
+			name: "succeeded promotion records deployment frequency and lead time",
+			promo: &kargoapi.Promotion{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "record-promotion-project",
+					Annotations: map[string]string{
+						kargoapi.AnnotationKeyCreateActor: "email:someone@example.com",
+					},
+				},
+				Spec: kargoapi.PromotionSpec{Stage: "record-promotion-succeeded-stage"},
+			},
+			status: &kargoapi.PromotionStatus{
+				Phase:      kargoapi.PromotionPhaseSucceeded,
+				FinishedAt: &metav1.Time{Time: now.Add(10 * time.Minute)},
+			},
+			freight: &kargoapi.Freight{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: now},
+			},
+			assert: func(t *testing.T, project, stage string) {
+				m := findMetricSample(t, "kargo_promotions_total", map[string]string{
+					"project":   project,
+					"stage":     stage,
+					"phase":     "Succeeded",
+					"initiator": "someone@example.com",
+				})
+				require.NotNil(t, m, "expected a recorded promotion metric")
+				assert.Equal(t, float64(1), m.GetCounter().GetValue())
+
+				lt := findMetricSample(t, "kargo_promotion_lead_time_seconds", map[string]string{
+					"project": project,
+					"stage":   stage,
+				})
+				require.NotNil(t, lt, "expected a recorded lead time metric")
+				require.Equal(t, uint64(1), lt.GetHistogram().GetSampleCount())
+				assert.InDelta(t, 600.0, lt.GetHistogram().GetSampleSum(), 0.001)
+			},
+		},
+		{
+			name: "failed promotion records deployment frequency but not lead time",
+			promo: &kargoapi.Promotion{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "record-promotion-project"},
+				Spec:       kargoapi.PromotionSpec{Stage: "record-promotion-failed-stage"},
+			},
+			status: &kargoapi.PromotionStatus{
+				Phase:      kargoapi.PromotionPhaseFailed,
+				FinishedAt: &metav1.Time{Time: now.Time},
+			},
+			freight: &kargoapi.Freight{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: now},
+			},
+			assert: func(t *testing.T, project, stage string) {
+				m := findMetricSample(t, "kargo_promotions_total", map[string]string{
+					"project":   project,
+					"stage":     stage,
+					"phase":     "Failed",
+					"initiator": "",
+				})
+				require.NotNil(t, m, "expected a recorded promotion metric")
+				assert.Equal(t, float64(1), m.GetCounter().GetValue())
+
+				lt := findMetricSample(t, "kargo_promotion_lead_time_seconds", map[string]string{
+					"project": project,
+					"stage":   stage,
+				})
+				assert.Nil(t, lt, "a Failed promotion must not record lead time")
+			},
+		},
+		{
+			name: "succeeded promotion with nil freight records deployment frequency but not lead time",
+			promo: &kargoapi.Promotion{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "record-promotion-project"},
+				Spec:       kargoapi.PromotionSpec{Stage: "record-promotion-nil-freight-stage"},
+			},
+			status: &kargoapi.PromotionStatus{
+				Phase:      kargoapi.PromotionPhaseSucceeded,
+				FinishedAt: &metav1.Time{Time: now.Time},
+			},
+			freight: nil,
+			assert: func(t *testing.T, project, stage string) {
+				m := findMetricSample(t, "kargo_promotions_total", map[string]string{
+					"project":   project,
+					"stage":     stage,
+					"phase":     "Succeeded",
+					"initiator": "",
+				})
+				require.NotNil(t, m, "expected a recorded promotion metric")
+
+				lt := findMetricSample(t, "kargo_promotion_lead_time_seconds", map[string]string{
+					"project": project,
+					"stage":   stage,
+				})
+				assert.Nil(t, lt, "lead time requires a non-nil Freight")
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			r := &reconciler{}
+			r.recordPromotion(testCase.promo, testCase.status, testCase.freight)
+			testCase.assert(t, testCase.promo.Namespace, testCase.promo.Spec.Stage)
+		})
 	}
 }
 

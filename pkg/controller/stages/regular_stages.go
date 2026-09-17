@@ -43,6 +43,7 @@ import (
 	"github.com/akuity/kargo/pkg/kubernetes"
 	libEvent "github.com/akuity/kargo/pkg/kubernetes/event"
 	"github.com/akuity/kargo/pkg/logging"
+	"github.com/akuity/kargo/pkg/metrics"
 	intpredicate "github.com/akuity/kargo/pkg/predicate"
 	"github.com/akuity/kargo/pkg/rollouts"
 )
@@ -364,7 +365,7 @@ func (r *RegularStageReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Reconcile the Stage.
 	logger.Debug("reconciling Stage")
-	newStatus, needsRequeue, reconcileErr := r.reconcile(ctx, stage, time.Now())
+	newStatus, needsRequeue, verificationOutcome, reconcileErr := r.reconcile(ctx, stage, time.Now())
 	logger.Debug("done reconciling Stage")
 
 	// Record the current refresh token as having been handled.
@@ -384,6 +385,23 @@ func (r *RegularStageReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to update Stage status: %w", err)
 	}
 
+	// The patch above is the single point through which any verification
+	// outcome computed during this pass is guaranteed to be durably
+	// persisted -- reconcile() can return early (with reconcileErr set)
+	// after computing an outcome but before its own sub-reconciler patch, so
+	// recording here (rather than inside reconcile()) is what keeps this
+	// correct on that path too. A no-op patch (nothing changed since the
+	// last persisted state, e.g. because reconcile()'s own sub-reconciler
+	// patch already persisted it) still returns a nil error, so this does
+	// not double-record: verifyStageFreight returns a nil outcome whenever
+	// the current Freight's last verification is already terminal.
+	if verificationOutcome != nil {
+		metrics.RecordVerification(stage.Namespace, stage.Name, string(verificationOutcome.phase))
+		if d := verificationOutcome.recoveryDuration; d != nil {
+			metrics.RecordRecoveryDuration(stage.Namespace, stage.Name, *d)
+		}
+	}
+
 	// Return the reconcile error if it exists.
 	if reconcileErr != nil {
 		return ctrl.Result{}, reconcileErr
@@ -397,11 +415,23 @@ func (r *RegularStageReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// reconcile runs the Stage's sub-reconcilers in sequence. Its third return
+// value is the terminal Freight verification outcome (if any) produced by
+// the "verifying Stage Freight" sub-reconciler during this pass, for the
+// caller to record as a metric once the status returned here has durably
+// persisted. It must be threaded through every return point in this
+// function: a sub-reconciler can fail (and this function returns early)
+// after the verification outcome was already computed but before that
+// specific step's own patch attempt -- notably, getVerificationResult and
+// startVerification can return a terminal (Error-phase) VerificationInfo
+// together with a non-nil error. The Stage status carrying that outcome is
+// still persisted by Reconcile's own final patch regardless of this
+// function's error return, so the outcome must not be silently dropped here.
 func (r *RegularStageReconciler) reconcile(
 	ctx context.Context,
 	stage *kargoapi.Stage,
 	startTime time.Time,
-) (kargoapi.StageStatus, bool, error) {
+) (kargoapi.StageStatus, bool, *verificationOutcome, error) {
 	logger := logging.LoggerFromContext(ctx)
 
 	// working is the Stage the sub-reconcilers operate on. Its status is
@@ -428,6 +458,13 @@ func (r *RegularStageReconciler) reconcile(
 	})
 
 	var requestRequeue bool
+	// pendingVerificationOutcome holds the terminal Freight verification
+	// outcome (if any) produced by the "verifying Stage Freight"
+	// sub-reconciler during this pass. It is returned to the caller (see the
+	// doc comment on reconcile) rather than recorded here, since a later
+	// sub-reconciler in the same pass can still fail after this outcome was
+	// computed.
+	var pendingVerificationOutcome *verificationOutcome
 	subReconcilers := []struct {
 		name      string
 		reconcile func() (kargoapi.StageStatus, error)
@@ -472,7 +509,8 @@ func (r *RegularStageReconciler) reconcile(
 		{
 			name: "verifying Stage Freight",
 			reconcile: func() (kargoapi.StageStatus, error) {
-				status, err := r.verifyStageFreight(ctx, working, startTime, time.Now)
+				status, outcome, err := r.verifyStageFreight(ctx, working, startTime, time.Now)
+				pendingVerificationOutcome = outcome
 				if err != nil {
 					err = fmt.Errorf("failed to verify Stage Freight: %w", err)
 				}
@@ -519,9 +557,13 @@ func (r *RegularStageReconciler) reconcile(
 		summarizeConditions(working, &newStatus, err)
 
 		// If an error occurred during the sub-reconciler, then we should
-		// return the error which will cause the Stage to be requeued.
+		// return the error which will cause the Stage to be requeued. Note
+		// that pendingVerificationOutcome may be non-nil here: Reconcile's
+		// own final patch persists newStatus (and any verification outcome it
+		// carries) regardless of this error, so the outcome must still be
+		// returned rather than dropped.
 		if err != nil {
-			return newStatus, false, err
+			return newStatus, false, pendingVerificationOutcome, err
 		}
 
 		// Patch the status of the Stage after each sub-reconciler to show progress.
@@ -543,7 +585,7 @@ func (r *RegularStageReconciler) reconcile(
 		conditions.Delete(&newStatus, kargoapi.ConditionTypeReconciling)
 	}
 
-	return newStatus, requestRequeue, nil
+	return newStatus, requestRequeue, pendingVerificationOutcome, nil
 }
 
 // syncPromotions synchronizes the Promotions for a Stage. It determines the
@@ -999,6 +1041,58 @@ func (r *RegularStageReconciler) syncFreight(ctx context.Context, stage *kargoap
 	return nil
 }
 
+// verificationOutcome describes a terminal Freight verification outcome
+// recorded by verifyStageFreight, for use in Prometheus metrics.
+type verificationOutcome struct {
+	phase kargoapi.VerificationPhase
+	// recoveryDuration is set only when this outcome is a Successful
+	// verification that immediately follows a Failed or Error verification
+	// for the same Freight, i.e. a recovery.
+	recoveryDuration *time.Duration
+}
+
+// previousVerification returns the most recent VerificationInfo in history
+// whose ID differs from newID -- i.e. the verification attempt that precedes
+// the one currently being recorded, whether newID updated an existing stack
+// entry in place (getVerificationResult/abortVerification reuse the current
+// entry's ID) or was freshly pushed to the front of the stack (startVerification
+// and the no-verification-config path mint a new ID). Returns nil if there is
+// no such entry.
+func previousVerification(
+	history kargoapi.VerificationInfoStack,
+	newID string,
+) *kargoapi.VerificationInfo {
+	for i := range history {
+		if history[i].ID != newID {
+			return &history[i]
+		}
+	}
+	return nil
+}
+
+// computeVerificationOutcome returns the verificationOutcome represented by
+// newVI, or nil if newVI is nil or not yet terminal. When newVI is a
+// Successful outcome that immediately follows a Failed or Error outcome for
+// the same Freight, the outcome's recoveryDuration is set to the time
+// between the two.
+func computeVerificationOutcome(
+	curFreight *kargoapi.FreightCollection,
+	newVI *kargoapi.VerificationInfo,
+) *verificationOutcome {
+	if newVI == nil || !newVI.Phase.IsTerminal() {
+		return nil
+	}
+	outcome := &verificationOutcome{phase: newVI.Phase}
+	if prev := previousVerification(curFreight.VerificationHistory, newVI.ID); prev != nil &&
+		newVI.Phase == kargoapi.VerificationPhaseSuccessful &&
+		(prev.Phase == kargoapi.VerificationPhaseFailed || prev.Phase == kargoapi.VerificationPhaseError) &&
+		prev.FinishTime != nil && newVI.FinishTime != nil {
+		d := newVI.FinishTime.Sub(prev.FinishTime.Time)
+		outcome.recoveryDuration = &d
+	}
+	return outcome
+}
+
 // verifyStageFreight verifies the current Freight of a Stage. If the Stage has
 // no current Freight, or the Freight has already been verified, then no action
 // is taken. If the Freight has not been verified yet, then a new verification
@@ -1014,12 +1108,17 @@ func (r *RegularStageReconciler) syncFreight(ctx context.Context, stage *kargoap
 //
 // When the Stage is unhealthy, or a Promotion is currently running, then the
 // verification is skipped.
+//
+// When a terminal verification outcome is reached, it is returned as an
+// *verificationOutcome for the caller to record as a metric once its status
+// patch has durably persisted. It is nil when no terminal outcome was reached
+// during this call.
 func (r *RegularStageReconciler) verifyStageFreight(
 	ctx context.Context,
 	stage *kargoapi.Stage,
 	startTime time.Time,
 	endTime func() time.Time,
-) (newStatus kargoapi.StageStatus, err error) {
+) (newStatus kargoapi.StageStatus, outcome *verificationOutcome, err error) {
 	logger := logging.LoggerFromContext(ctx)
 	newStatus = *stage.Status.DeepCopy()
 
@@ -1034,14 +1133,14 @@ func (r *RegularStageReconciler) verifyStageFreight(
 			Message:            "Stage has no current Freight to verify",
 			ObservedGeneration: stage.Generation,
 		})
-		return newStatus, nil
+		return newStatus, nil, nil
 	}
 
 	// If we are currently promoting Freight, then we are not in a stable state
 	// and should wait until the promotion is complete.
 	if curPromotion := stage.Status.CurrentPromotion; curPromotion != nil {
 		logger.Debug("Stage is currently promoting Freight: skipping verification")
-		return newStatus, nil
+		return newStatus, nil, nil
 	}
 
 	defer func() {
@@ -1147,7 +1246,8 @@ func (r *RegularStageReconciler) verifyStageFreight(
 					r.recordFreightVerificationEvent(stage, ref, newVI)
 				}
 
-				return newStatus, err
+				outcome = computeVerificationOutcome(curFreight, newVI)
+				return newStatus, outcome, err
 			}
 
 			// Get the latest result of the verification.
@@ -1163,14 +1263,15 @@ func (r *RegularStageReconciler) verifyStageFreight(
 					}
 				}
 			}
-			return newStatus, err
+			outcome = computeVerificationOutcome(curFreight, newVI)
+			return newStatus, outcome, err
 		}
 
 		// If the last verification is terminal, and we are not re-verifying
 		// the Freight, then we have nothing to do.
 		if !reverifyReq.ForID(lastVerification.ID) {
 			logger.Debug("Stage Freight has already been verified")
-			return newStatus, nil
+			return newStatus, nil, nil
 		}
 	}
 
@@ -1178,7 +1279,7 @@ func (r *RegularStageReconciler) verifyStageFreight(
 	// verify the Freight.
 	if stage.Status.Health == nil || stage.Status.Health.Status != kargoapi.HealthStateHealthy {
 		logger.Debug("Stage has not passed health checks: skipping verification")
-		return newStatus, nil
+		return newStatus, nil, nil
 	}
 
 	// If we have no specific verification configuration, then we can mark the
@@ -1196,7 +1297,8 @@ func (r *RegularStageReconciler) verifyStageFreight(
 		for _, ref := range curFreight.Freight {
 			r.recordFreightVerificationEvent(stage, ref, &newVI)
 		}
-		return newStatus, nil
+		outcome = computeVerificationOutcome(curFreight, &newVI)
+		return newStatus, outcome, nil
 	}
 
 	// Start a new (re-)verification.
@@ -1213,7 +1315,8 @@ func (r *RegularStageReconciler) verifyStageFreight(
 			}
 		}
 	}
-	return newStatus, err
+	outcome = computeVerificationOutcome(curFreight, newVI)
+	return newStatus, outcome, err
 }
 
 // markFreightVerifiedForStage marks the Freight that is associated with the

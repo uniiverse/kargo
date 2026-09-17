@@ -137,3 +137,81 @@ controller:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
 ```
+
+## Delivery Metrics
+
+The controller records four metrics about Promotions and Stage Freight
+verifications. Use these metrics to compute delivery performance measures.
+Some teams call these measures DORA metrics: Deployment Frequency, Lead Time
+for Changes, Change Failure Rate, and Mean Time to Recovery (MTTR).
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `kargo_promotions_total` | Counter | `project`, `stage`, `phase`, `initiator` | Total Promotions that reached a terminal phase. |
+| `kargo_promotion_lead_time_seconds` | Histogram | `project`, `stage` | Time from Freight discovery to a successful Promotion of that Freight into a Stage. |
+| `kargo_stage_verifications_total` | Counter | `project`, `stage`, `phase` | Total Stage Freight verifications that reached a terminal phase. |
+| `kargo_stage_recovery_duration_seconds` | Histogram | `project`, `stage` | Time from a failed verification to the next successful verification for the same deployed Freight. |
+
+:::note
+
+The `initiator` label holds the actor that created the Promotion. This value
+is often a user's email address. Kargo already exposes this same value today
+through Kubernetes Event annotations. Each distinct initiator adds a new time
+series to Prometheus. On a cluster with many distinct users, this can raise
+Prometheus's storage cost. Add a `metricRelabelings` rule to your
+`ServiceMonitor` to drop or hash this label if needed.
+
+:::
+
+### Compute Delivery Performance Measures
+
+Use these example PromQL queries as a starting point.
+
+Deployment Frequency (successful Promotions per Stage, per week):
+
+```promql
+sum by (project, stage) (increase(kargo_promotions_total{phase="Succeeded"}[7d]))
+```
+
+Lead Time for Changes (median seconds from Freight discovery to a successful
+Promotion):
+
+```promql
+histogram_quantile(0.5, sum by (le, project, stage) (rate(kargo_promotion_lead_time_seconds_bucket[7d])))
+```
+
+Change Failure Rate (fraction of verifications that failed):
+
+```promql
+sum by (project, stage) (increase(kargo_stage_verifications_total{phase=~"Failed|Error"}[7d]))
+/
+sum by (project, stage) (increase(kargo_stage_verifications_total[7d]))
+```
+
+:::note
+
+Two configuration and usage patterns affect this measure. First, a user can
+abort a verification in progress. Kargo records an aborted verification with
+`phase="Failed"`, because the underlying analysis did not complete
+successfully. This is by design, but it means Change Failure Rate also counts
+user-requested aborts, not only genuine failures. Second, when the Argo
+Rollouts integration is disabled on a controller, every verification for that
+controller records `phase="Error"`. In that configuration, Change Failure
+Rate reflects the disabled integration, not the health of the Stage.
+
+:::
+
+Mean Time to Recovery (median seconds to recover from a failed verification):
+
+```promql
+histogram_quantile(0.5, sum by (le, project, stage) (rate(kargo_stage_recovery_duration_seconds_bucket[7d])))
+```
+
+:::note
+
+The recovery duration metric only measures recovery through re-verification
+of the same Freight. It does not measure recovery through a new Promotion of
+different Freight. Most recoveries promote a fix as new Freight. Treat this
+metric as a partial measure of MTTR, not a complete one.
+
+:::
