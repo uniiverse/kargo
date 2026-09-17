@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	rolloutsapi "github.com/akuity/kargo/api/stubs/rollouts/v1alpha1"
 	kargoapi "github.com/akuity/kargo/api/v1alpha1"
@@ -34,6 +36,7 @@ import (
 func TestRegularStageReconciler_Reconcile(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, kargoapi.AddToScheme(scheme))
+	require.NoError(t, rolloutsapi.AddToScheme(scheme))
 
 	tests := []struct {
 		name        string
@@ -373,6 +376,89 @@ func TestRegularStageReconciler_Reconcile(t *testing.T) {
 				assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
 			},
 		},
+		{
+			// Regression test: getVerificationResult can return a terminal
+			// (Error-phase) VerificationInfo *together with* a non-nil error
+			// (e.g. the AnalysisRun's Get call fails). That makes the
+			// "verifying Stage Freight" sub-reconciler return an error, so
+			// reconcile()'s loop never reaches that sub-reconciler's own
+			// patch-and-record step. The terminal outcome must still be
+			// recorded here, because Reconcile's own final patch below
+			// persists it regardless of reconcileErr.
+			name: "records verification metrics even when the verify step itself errors",
+			req: ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: "bugfix-metrics-project",
+					Name:      "bugfix-metrics-stage",
+				},
+			},
+			stage: &kargoapi.Stage{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:  "bugfix-metrics-project",
+					Name:       "bugfix-metrics-stage",
+					Finalizers: []string{kargoapi.FinalizerName},
+				},
+				Spec: kargoapi.StageSpec{
+					PromotionTemplate: &kargoapi.PromotionTemplate{
+						Spec: kargoapi.PromotionTemplateSpec{
+							Steps: []kargoapi.PromotionStep{{}, {}},
+						},
+					},
+					Verification: &kargoapi.Verification{},
+				},
+				Status: kargoapi.StageStatus{
+					LastPromotion: &kargoapi.PromotionReference{
+						Name: "bugfix-metrics-promotion",
+						Status: &kargoapi.PromotionStatus{
+							Phase: kargoapi.PromotionPhaseSucceeded,
+						},
+					},
+					FreightHistory: kargoapi.FreightHistory{
+						{
+							ID: "bugfix-metrics-collection",
+							Freight: map[string]kargoapi.FreightReference{
+								"Warehouse/test-warehouse": {Name: "bugfix-metrics-freight"},
+							},
+							VerificationHistory: []kargoapi.VerificationInfo{
+								{
+									ID:    "bugfix-metrics-verification-id",
+									Phase: kargoapi.VerificationPhaseRunning,
+									AnalysisRun: &kargoapi.AnalysisRunReference{
+										Name:      "missing-analysis-run",
+										Namespace: "bugfix-metrics-project",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			objects: []client.Object{
+				&kargoapi.Freight{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "bugfix-metrics-project",
+						Name:      "bugfix-metrics-freight",
+					},
+					Origin: kargoapi.FreightOrigin{
+						Kind: kargoapi.FreightOriginKindWarehouse,
+						Name: "test-warehouse",
+					},
+				},
+				// Deliberately no AnalysisRun object for "missing-analysis-run",
+				// so getVerificationResult's Get call fails with NotFound.
+			},
+			assertions: func(t *testing.T, _ client.Client, _ ctrl.Result, err error) {
+				require.Error(t, err)
+
+				m := findStageMetricSample(t, "kargo_stage_verifications_total", map[string]string{
+					"project": "bugfix-metrics-project",
+					"stage":   "bugfix-metrics-stage",
+					"phase":   "Error",
+				})
+				require.NotNil(t, m, "expected a recorded verification metric despite the reconcile error")
+				assert.Equal(t, float64(1), m.GetCounter().GetValue())
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -385,7 +471,7 @@ func TestRegularStageReconciler_Reconcile(t *testing.T) {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithObjects(objects...).
-				WithStatusSubresource(&kargoapi.Stage{}).
+				WithStatusSubresource(&kargoapi.Stage{}, &kargoapi.Freight{}).
 				WithIndex(
 					&kargoapi.Promotion{},
 					indexer.PromotionsByStageField,
@@ -420,8 +506,17 @@ func TestRegularStageReconciler_Reconcile(t *testing.T) {
 				Build()
 
 			r := &RegularStageReconciler{
-				client:      c,
-				eventSender: k8sevent.NewEventSender(fakeevent.NewEventRecorder(10)),
+				client:        c,
+				eventSender:   k8sevent.NewEventSender(fakeevent.NewEventRecorder(10)),
+				healthChecker: &health.MockAggregatingChecker{},
+				cfg:           ReconcilerConfig{RolloutsIntegrationEnabled: true},
+				backoffCfg: wait.Backoff{
+					Duration: 1 * time.Second,
+					Factor:   2,
+					Steps:    2,
+					Cap:      2 * time.Second,
+					Jitter:   0.1,
+				},
 			}
 
 			result, err := r.Reconcile(t.Context(), tt.req)
@@ -442,7 +537,7 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 		stage       *kargoapi.Stage
 		objects     []client.Object
 		interceptor interceptor.Funcs
-		assertions  func(*testing.T, kargoapi.StageStatus, bool, error)
+		assertions  func(*testing.T, kargoapi.StageStatus, bool, *verificationOutcome, error)
 	}{
 		{
 			name: "subreconciler error preserves reconciling condition",
@@ -458,7 +553,7 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 					return fmt.Errorf("forced error")
 				},
 			},
-			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, err error) {
+			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, _ *verificationOutcome, err error) {
 				require.Error(t, err)
 				require.False(t, requeue)
 
@@ -477,7 +572,7 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 					Generation: 1,
 				},
 			},
-			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, err error) {
+			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, _ *verificationOutcome, err error) {
 				require.NoError(t, err)
 				require.False(t, requeue)
 
@@ -506,7 +601,7 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 					},
 				},
 			},
-			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, err error) {
+			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, _ *verificationOutcome, err error) {
 				require.NoError(t, err)
 				assert.False(t, requeue)
 
@@ -576,7 +671,7 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 					return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
 				},
 			},
-			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, err error) {
+			assertions: func(t *testing.T, status kargoapi.StageStatus, requeue bool, _ *verificationOutcome, err error) {
 				// Status update failures between sub-reconcilers are non-fatal.
 				require.NoError(t, err)
 				require.False(t, requeue)
@@ -586,6 +681,134 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 				require.NotNil(t, status.LastPromotion)
 				assert.Equal(t, "test-promotion", status.LastPromotion.Name)
 				require.Len(t, status.FreightHistory, 1)
+			},
+		},
+		{
+			// This Stage has no verification config, so verifyStageFreight
+			// immediately marks the Freight as Successfully verified. reconcile
+			// must surface that terminal outcome to its caller (Reconcile),
+			// which is responsible for recording it as a metric once its own
+			// final status patch persists it.
+			name: "returns the verification outcome once a terminal verification completes",
+			stage: &kargoapi.Stage{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:  "test-project",
+					Name:       "metrics-recorded-stage",
+					Generation: 1,
+				},
+				Status: kargoapi.StageStatus{
+					CurrentPromotion: &kargoapi.PromotionReference{Name: "metrics-recorded-promotion"},
+				},
+			},
+			objects: []client.Object{
+				&kargoapi.Freight{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "test-project",
+						Name:      "metrics-recorded-freight",
+					},
+					Origin: kargoapi.FreightOrigin{
+						Kind: kargoapi.FreightOriginKindWarehouse,
+						Name: "test-warehouse",
+					},
+				},
+				&kargoapi.Promotion{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "test-project",
+						Name:      "metrics-recorded-promotion",
+					},
+					Spec: kargoapi.PromotionSpec{Stage: "metrics-recorded-stage"},
+					Status: kargoapi.PromotionStatus{
+						Phase:      kargoapi.PromotionPhaseSucceeded,
+						FinishedAt: &metav1.Time{Time: now},
+						FreightCollection: &kargoapi.FreightCollection{
+							ID: "metrics-recorded-collection-id",
+							Freight: map[string]kargoapi.FreightReference{
+								"Warehouse/test-warehouse": {Name: "metrics-recorded-freight"},
+							},
+						},
+					},
+				},
+			},
+			assertions: func(t *testing.T, _ kargoapi.StageStatus, _ bool, outcome *verificationOutcome, err error) {
+				require.NoError(t, err)
+
+				require.NotNil(t, outcome)
+				assert.Equal(t, kargoapi.VerificationPhaseSuccessful, outcome.phase)
+				assert.Nil(t, outcome.recoveryDuration)
+			},
+		},
+		{
+			// Same setup as above, but the Stage status patch that follows the
+			// "verifying Stage Freight" sub-reconciler fails. reconcile must
+			// still return the outcome -- whether it ends up persisted (and
+			// thus recorded) is entirely up to the caller's own final patch,
+			// not gated here.
+			name: "still returns the verification outcome when the status patch fails",
+			stage: &kargoapi.Stage{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:  "test-project",
+					Name:       "metrics-not-recorded-stage",
+					Generation: 1,
+				},
+				Status: kargoapi.StageStatus{
+					CurrentPromotion: &kargoapi.PromotionReference{Name: "metrics-not-recorded-promotion"},
+				},
+			},
+			objects: []client.Object{
+				&kargoapi.Freight{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "test-project",
+						Name:      "metrics-not-recorded-freight",
+					},
+					Origin: kargoapi.FreightOrigin{
+						Kind: kargoapi.FreightOriginKindWarehouse,
+						Name: "test-warehouse",
+					},
+				},
+				&kargoapi.Promotion{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "test-project",
+						Name:      "metrics-not-recorded-promotion",
+					},
+					Spec: kargoapi.PromotionSpec{Stage: "metrics-not-recorded-stage"},
+					Status: kargoapi.PromotionStatus{
+						Phase:      kargoapi.PromotionPhaseSucceeded,
+						FinishedAt: &metav1.Time{Time: now},
+						FreightCollection: &kargoapi.FreightCollection{
+							ID: "metrics-not-recorded-collection-id",
+							Freight: map[string]kargoapi.FreightReference{
+								"Warehouse/test-warehouse": {Name: "metrics-not-recorded-freight"},
+							},
+						},
+					},
+				},
+			},
+			interceptor: interceptor.Funcs{
+				SubResourcePatch: func(
+					ctx context.Context,
+					c client.Client,
+					subResourceName string,
+					obj client.Object,
+					patch client.Patch,
+					opts ...client.SubResourcePatchOption,
+				) error {
+					// Fail every Stage status update, including the one that
+					// follows "verifying Stage Freight" -- wherever it falls in
+					// the sequence (some sub-reconcilers produce no diff and
+					// are skipped by PatchStatus's own no-op short-circuit, so
+					// its position isn't fixed). Let other resources (e.g.
+					// Freight) patch normally.
+					if _, ok := obj.(*kargoapi.Stage); !ok {
+						return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+					}
+					return errors.New("simulated patch failure")
+				},
+			},
+			assertions: func(t *testing.T, _ kargoapi.StageStatus, _ bool, outcome *verificationOutcome, err error) {
+				require.NoError(t, err)
+
+				require.NotNil(t, outcome)
+				assert.Equal(t, kargoapi.VerificationPhaseSuccessful, outcome.phase)
 			},
 		},
 	}
@@ -638,10 +861,44 @@ func TestRegularStagesReconciler_reconcile(t *testing.T) {
 				healthChecker: &health.MockAggregatingChecker{},
 			}
 
-			status, requeue, err := r.reconcile(t.Context(), tt.stage, now)
-			tt.assertions(t, status, requeue, err)
+			status, requeue, outcome, err := r.reconcile(t.Context(), tt.stage, now)
+			tt.assertions(t, status, requeue, outcome, err)
 		})
 	}
+}
+
+// findStageMetricSample locates, within the named metric family gathered
+// from controller-runtime's default metrics registry (the same registry
+// pkg/metrics records to), the sample whose labels exactly match wantLabels.
+// It returns nil if no such sample exists.
+func findStageMetricSample(t *testing.T, family string, wantLabels map[string]string) *dto.Metric {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		if mf.GetName() != family {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			gotLabels := make(map[string]string, len(m.GetLabel()))
+			for _, l := range m.GetLabel() {
+				gotLabels[l.GetName()] = l.GetValue()
+			}
+			match := len(gotLabels) == len(wantLabels)
+			if match {
+				for k, v := range wantLabels {
+					if gotLabels[k] != v {
+						match = false
+						break
+					}
+				}
+			}
+			if match {
+				return m
+			}
+		}
+	}
+	return nil
 }
 
 // releaseHoldAnnotations returns the annotations set on a release-intent Promotion.
@@ -2724,12 +2981,25 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 	startTime := time.Now()
 	endTime := startTime.Add(5 * time.Minute)
 	fixedEndTime := func() time.Time { return endTime }
+	// These model FinishTimes as they would come back from the API server
+	// (second precision), since the AnalysisRun fixture below is read back
+	// through the fake client, which round-trips through JSON and truncates
+	// metav1.Time to whole seconds.
+	firstVerificationFinishTime := metav1.NewTime(startTime.Add(-10 * time.Minute).Truncate(time.Second))
+	secondVerificationFinishTime := metav1.NewTime(endTime.Truncate(time.Second))
 
 	tests := []struct {
-		name             string
-		stage            *kargoapi.Stage
-		objects          []client.Object
-		assertions       func(*testing.T, client.Client, *fakeevent.EventRecorder, kargoapi.StageStatus, error)
+		name       string
+		stage      *kargoapi.Stage
+		objects    []client.Object
+		assertions func(
+			*testing.T,
+			client.Client,
+			*fakeevent.EventRecorder,
+			kargoapi.StageStatus,
+			*verificationOutcome,
+			error,
+		)
 		rolloutsDisabled bool
 	}{
 		{
@@ -2748,6 +3018,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -2786,6 +3057,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -2840,6 +3112,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -2889,6 +3162,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				_ *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -2930,6 +3204,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				_ *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -2980,6 +3255,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3054,6 +3330,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				c client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3132,6 +3409,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				c client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3214,6 +3492,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3284,6 +3563,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				outcome *verificationOutcome,
 				err error,
 			) {
 				require.True(t, apierrors.IsNotFound(err))
@@ -3297,6 +3577,13 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				require.NotNil(t, lastVerification)
 				assert.Equal(t, kargoapi.VerificationPhaseError, lastVerification.Phase)
 				assert.Contains(t, lastVerification.Message, "error getting AnalysisRun")
+
+				// The outcome must still be surfaced even though err is also
+				// non-nil here -- callers persist and record this outcome
+				// regardless of this function's error return (see reconcile's
+				// doc comment).
+				require.NotNil(t, outcome)
+				assert.Equal(t, kargoapi.VerificationPhaseError, outcome.phase)
 
 				verifiedCond := conditions.Get(&status, kargoapi.ConditionTypeVerified)
 				require.NotNil(t, verifiedCond)
@@ -3356,6 +3643,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3429,6 +3717,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				_ *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				_ *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3512,6 +3801,7 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				_ client.Client,
 				recorder *fakeevent.EventRecorder,
 				status kargoapi.StageStatus,
+				outcome *verificationOutcome,
 				err error,
 			) {
 				require.NoError(t, err)
@@ -3533,6 +3823,93 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				assert.Equal(t, metav1.ConditionFalse, verifiedCond.Status)
 				assert.Equal(t, "VerificationFailed", verifiedCond.Reason)
 				assert.Contains(t, verifiedCond.Message, "Analysis failed")
+
+				require.NotNil(t, outcome)
+				assert.Equal(t, kargoapi.VerificationPhaseFailed, outcome.phase)
+				assert.Nil(t, outcome.recoveryDuration)
+			},
+		},
+		{
+			name: "recovery: successful verification following a failed one",
+			stage: &kargoapi.Stage{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "fake-project",
+					Name:      "test-stage",
+				},
+				Spec: kargoapi.StageSpec{
+					Verification: &kargoapi.Verification{},
+				},
+				Status: kargoapi.StageStatus{
+					Health: &kargoapi.Health{
+						Status: kargoapi.HealthStateHealthy,
+					},
+					FreightHistory: kargoapi.FreightHistory{
+						{
+							ID: "test-freight-collection",
+							Freight: map[string]kargoapi.FreightReference{
+								"warehouse": {Name: "test-freight"},
+							},
+							VerificationHistory: []kargoapi.VerificationInfo{
+								{
+									ID:    "second-verification-id",
+									Phase: kargoapi.VerificationPhaseRunning,
+									AnalysisRun: &kargoapi.AnalysisRunReference{
+										Name:      "second-analysis-run",
+										Namespace: "fake-project",
+									},
+								},
+								{
+									ID:         "first-verification-id",
+									Phase:      kargoapi.VerificationPhaseFailed,
+									FinishTime: ptr.To(firstVerificationFinishTime),
+								},
+							},
+						},
+					},
+				},
+			},
+			objects: []client.Object{
+				&kargoapi.Freight{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-freight",
+						Namespace: "fake-project",
+					},
+				},
+				&rolloutsapi.AnalysisRun{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "second-analysis-run",
+						Namespace: "fake-project",
+					},
+					Status: rolloutsapi.AnalysisRunStatus{
+						Phase:       "Successful",
+						CompletedAt: ptr.To(secondVerificationFinishTime),
+					},
+				},
+			},
+			assertions: func(
+				t *testing.T,
+				_ client.Client,
+				_ *fakeevent.EventRecorder,
+				status kargoapi.StageStatus,
+				outcome *verificationOutcome,
+				err error,
+			) {
+				require.NoError(t, err)
+
+				curFreight := status.FreightHistory.Current()
+				require.NotNil(t, curFreight)
+				lastVerification := curFreight.VerificationHistory.Current()
+				require.NotNil(t, lastVerification)
+				require.Equal(t, kargoapi.VerificationPhaseSuccessful, lastVerification.Phase)
+
+				require.NotNil(t, outcome)
+				assert.Equal(t, kargoapi.VerificationPhaseSuccessful, outcome.phase)
+				require.NotNil(t, outcome.recoveryDuration)
+				assert.Equal(
+					t,
+					secondVerificationFinishTime.Sub(firstVerificationFinishTime.Time),
+					*outcome.recoveryDuration,
+				)
 			},
 		},
 	}
@@ -3562,8 +3939,8 @@ func TestRegularStageReconciler_verifyStageFreight(t *testing.T) {
 				},
 			}
 
-			status, err := r.verifyStageFreight(t.Context(), tt.stage, startTime, fixedEndTime)
-			tt.assertions(t, c, recorder, status, err)
+			status, outcome, err := r.verifyStageFreight(t.Context(), tt.stage, startTime, fixedEndTime)
+			tt.assertions(t, c, recorder, status, outcome, err)
 		})
 	}
 }

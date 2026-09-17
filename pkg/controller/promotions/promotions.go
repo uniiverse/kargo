@@ -31,6 +31,7 @@ import (
 	"github.com/akuity/kargo/pkg/kubeclient"
 	libEvent "github.com/akuity/kargo/pkg/kubernetes/event"
 	"github.com/akuity/kargo/pkg/logging"
+	"github.com/akuity/kargo/pkg/metrics"
 	intpredicate "github.com/akuity/kargo/pkg/predicate"
 	"github.com/akuity/kargo/pkg/promotion"
 )
@@ -91,6 +92,12 @@ type reconciler struct {
 	) error
 
 	cleanupWorkDirFn func(ctx context.Context, promoUID types.UID)
+
+	recordPromotionFn func(
+		promo *kargoapi.Promotion,
+		status *kargoapi.PromotionStatus,
+		freight *kargoapi.Freight,
+	)
 }
 
 // SetupReconcilerWithManager initializes a reconciler for Promotion resources
@@ -250,6 +257,7 @@ func newReconciler(
 	r.promoteFn = r.promote
 	r.terminatePromotionFn = r.terminatePromotion
 	r.cleanupWorkDirFn = r.cleanupWorkDir
+	r.recordPromotionFn = r.recordPromotion
 	return r
 }
 
@@ -442,9 +450,17 @@ func (r *reconciler) Reconcile(
 		newStatus.LastHandledRefresh = token
 	}
 
-	if err = kubeclient.PatchStatus(ctx, r.kargoClient, promo, func(status *kargoapi.PromotionStatus) {
+	err = kubeclient.PatchStatus(ctx, r.kargoClient, promo, func(status *kargoapi.PromotionStatus) {
 		*status = *newStatus
-	}); err != nil {
+	})
+	// Capture the primary patch's own outcome before the fallback branch below
+	// (if taken) overwrites err. Metrics must only be recorded once the phase
+	// recorded in newStatus has been durably persisted -- a Prometheus counter
+	// cannot tolerate the same at-least-once duplication that the Kubernetes
+	// event sent below already tolerates, since it would skew rate()-based
+	// DORA calculations.
+	primaryPatchErr := err
+	if err != nil {
 		logger.Error(err, "error updating Promotion status")
 
 		if apierrors.IsInvalid(err) {
@@ -464,6 +480,10 @@ func (r *reconciler) Reconcile(
 	// Best-effort cleanup of working directory on terminal state.
 	if newStatus.Phase.IsTerminal() {
 		r.cleanupWorkDirFn(ctx, promo.UID)
+	}
+
+	if primaryPatchErr == nil && newStatus.Phase.IsTerminal() {
+		r.recordPromotionFn(promo, newStatus, freight)
 	}
 
 	// Record event after patching status if new phase is terminal
@@ -700,6 +720,29 @@ func (r *reconciler) buildTargetFreightCollection(
 	return freightCol
 }
 
+// recordPromotion records Prometheus metrics -- deployment frequency and, on
+// success, lead time for changes -- for a Promotion that has reached a
+// terminal phase.
+func (r *reconciler) recordPromotion(
+	promo *kargoapi.Promotion,
+	status *kargoapi.PromotionStatus,
+	freight *kargoapi.Freight,
+) {
+	// The "initiator" metric label always means whoever created the
+	// Promotion -- even when this is being called for an Aborted outcome,
+	// where the aborter (recorded elsewhere as the event actor) may be a
+	// different person.
+	initiator := api.CreateActorAnnotationValue(promo)
+	metrics.RecordPromotion(promo.Namespace, promo.Spec.Stage, string(status.Phase), initiator)
+	if status.Phase == kargoapi.PromotionPhaseSucceeded && status.FinishedAt != nil && freight != nil {
+		metrics.RecordPromotionLeadTime(
+			promo.Namespace,
+			promo.Spec.Stage,
+			status.FinishedAt.Sub(freight.EffectiveDiscoveredAt()),
+		)
+	}
+}
+
 // terminatePromotion terminates the given Promotion with a message indicating
 // that it was terminated on user request. It does nothing if the Promotion is
 // already in a terminal phase.
@@ -750,6 +793,8 @@ func (r *reconciler) terminatePromotion(
 	}); err != nil {
 		return err
 	}
+
+	r.recordPromotionFn(promo, newStatus, freight)
 
 	// Best-effort cleanup of working directory.
 	r.cleanupWorkDirFn(ctx, promo.UID)
