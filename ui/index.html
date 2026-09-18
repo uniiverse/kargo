@@ -3,19 +3,30 @@
   <head>
     <meta charset="utf-8" />
     <!--
-      The two __BASE_*__ placeholders are substituted by the kargo API
-      server's dashboard handler at serve time. <base href> is set to a
-      runtime-resolved prefix (with trailing slash) so the browser can
-      resolve relative URLs in this document against the deployed prefix.
-      The window.__KARGO_BASE_PATH__ global (no trailing slash) is read
-      by JS code that constructs URLs explicitly — ConnectRPC/REST
-      baseUrl, React Router basename, window.location redirects.
-      When the server is at the root, both placeholders resolve to their
-      no-op forms ("/" and "" respectively).
+      All __PLACEHOLDER__ tokens below are substituted by the kargo API
+      server's dashboard handler at serve time (see renderIndexHTML in
+      pkg/server/server.go). <base href> is set to a runtime-resolved
+      prefix (with trailing slash) so the browser can resolve relative
+      URLs in this document against the deployed prefix. The
+      window.__KARGO_BASE_PATH__ global (no trailing slash) is read by JS
+      code that constructs URLs explicitly — ConnectRPC/REST baseUrl,
+      React Router basename, window.location redirects. When the server
+      is at the root, both basePath placeholders resolve to their no-op
+      forms ("/" and "" respectively).
+
+      The window.__KARGO_GRAFANA_*__ globals configure optional Grafana
+      deep-links for AnalysisRun verification logs (see
+      ui/src/config/grafana.ts). They come from the server's GRAFANA_*
+      env vars and default to empty strings, which disables the
+      deep-links — no Grafana URL is ever baked into this bundle.
     -->
     <base href="__BASE_HREF__" />
     <script>
       window.__KARGO_BASE_PATH__ = '__BASE_PATH__';
+      window.__KARGO_GRAFANA_URL__ = '__GRAFANA_URL__';
+      window.__KARGO_LOKI_DATASOURCE_UID__ = '__LOKI_DATASOURCE_UID__';
+      window.__KARGO_VERIFICATION_CLUSTER__ = '__VERIFICATION_CLUSTER__';
+      window.__KARGO_VERIFICATION_DASHBOARD_UID__ = '__VERIFICATION_DASHBOARD_UID__';
     </script>
     <link rel="icon" type="image/png" href="kargo-logo-head-only.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

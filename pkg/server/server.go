@@ -223,7 +223,13 @@ func (s *server) Serve(ctx context.Context, l net.Listener) error {
 			return fmt.Errorf("error initializing UI file system: %w", err)
 		}
 	}
-	mux.Handle("/", newDashboardRequestHandler(dashboardFS, s.cfg.BasePath))
+	mux.Handle("/", newDashboardRequestHandler(dashboardFS, dashboardHTMLConfig{
+		basePath:                 s.cfg.BasePath,
+		grafanaURL:               s.cfg.GrafanaConfig.URL,
+		lokiDatasourceUID:        s.cfg.GrafanaConfig.LokiDatasourceUID,
+		verificationCluster:      s.cfg.GrafanaConfig.VerificationCluster,
+		verificationDashboardUID: s.cfg.GrafanaConfig.VerificationDashboardUID,
+	}))
 
 	handler := wrapWithBasePath(mux, s.cfg.BasePath)
 
@@ -344,14 +350,36 @@ const indexHTMLBasePlaceholder = "__BASE_HREF__"
 // prefix.
 const indexHTMLBasePathPlaceholder = "__BASE_PATH__"
 
-func newDashboardRequestHandler(uiFS fs.FS, basePath string) http.HandlerFunc {
+// The four placeholders below surface optional Grafana deep-link config to
+// the UI (see config.GrafanaConfig) using the same window-global injection
+// mechanism as indexHTMLBasePathPlaceholder. When GrafanaConfig.URL is
+// unset, the substituted value is an empty string and the UI's
+// grafana-links.ts treats that as "deep-links disabled".
+const (
+	indexHTMLGrafanaURLPlaceholder               = "__GRAFANA_URL__"
+	indexHTMLLokiDatasourceUIDPlaceholder        = "__LOKI_DATASOURCE_UID__"
+	indexHTMLVerificationClusterPlaceholder      = "__VERIFICATION_CLUSTER__"
+	indexHTMLVerificationDashboardUIDPlaceholder = "__VERIFICATION_DASHBOARD_UID__"
+)
+
+// dashboardHTMLConfig holds the server-side values substituted into the
+// bundled UI's index.html placeholders at serve time.
+type dashboardHTMLConfig struct {
+	basePath                 string
+	grafanaURL               string
+	lokiDatasourceUID        string
+	verificationCluster      string
+	verificationDashboardUID string
+}
+
+func newDashboardRequestHandler(uiFS fs.FS, cfg dashboardHTMLConfig) http.HandlerFunc {
 	const indexHTML = "index.html"
 
-	// Pre-render the index.html body once, substituting the basePath
-	// placeholders. The render result is small and held in memory for the
-	// life of the process so we don't pay the read+replace cost on every
-	// request that falls through to index.html.
-	renderedIndex, indexLastModified := renderIndexHTML(uiFS, indexHTML, basePath)
+	// Pre-render the index.html body once, substituting the basePath and
+	// Grafana placeholders. The render result is small and held in memory
+	// for the life of the process so we don't pay the read+replace cost on
+	// every request that falls through to index.html.
+	renderedIndex, indexLastModified := renderIndexHTML(uiFS, indexHTML, cfg)
 	serveIndex := func(w http.ResponseWriter, req *http.Request) {
 		httputil.SetNoCacheHeaders(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -408,24 +436,36 @@ func newDashboardRequestHandler(uiFS fs.FS, basePath string) http.HandlerFunc {
 }
 
 // renderIndexHTML reads the dashboard's index.html out of uiFS, substitutes
-// the basePath placeholders, and returns the rendered bytes plus a
-// last-modified timestamp suitable for http.ServeContent. Returns an
+// the basePath and Grafana placeholders, and returns the rendered bytes plus
+// a last-modified timestamp suitable for http.ServeContent. Returns an
 // empty-bodied result and a zero timestamp if the file can't be read; the
 // dashboard handler degrades to serving an empty document rather than
 // returning errors at request time.
-func renderIndexHTML(uiFS fs.FS, name, basePath string) ([]byte, time.Time) {
+func renderIndexHTML(uiFS fs.FS, name string, cfg dashboardHTMLConfig) ([]byte, time.Time) {
 	raw, err := fs.ReadFile(uiFS, name)
 	if err != nil {
 		return nil, time.Time{}
 	}
 	baseHref := "/"
 	basePathValue := ""
-	if basePath != "" {
-		baseHref = basePath + "/"
-		basePathValue = basePath
+	if cfg.basePath != "" {
+		baseHref = cfg.basePath + "/"
+		basePathValue = cfg.basePath
 	}
 	rendered := bytes.ReplaceAll(raw, []byte(indexHTMLBasePlaceholder), []byte(baseHref))
 	rendered = bytes.ReplaceAll(rendered, []byte(indexHTMLBasePathPlaceholder), []byte(basePathValue))
+	rendered = bytes.ReplaceAll(rendered, []byte(indexHTMLGrafanaURLPlaceholder), []byte(cfg.grafanaURL))
+	rendered = bytes.ReplaceAll(
+		rendered, []byte(indexHTMLLokiDatasourceUIDPlaceholder), []byte(cfg.lokiDatasourceUID),
+	)
+	rendered = bytes.ReplaceAll(
+		rendered, []byte(indexHTMLVerificationClusterPlaceholder), []byte(cfg.verificationCluster),
+	)
+	rendered = bytes.ReplaceAll(
+		rendered,
+		[]byte(indexHTMLVerificationDashboardUIDPlaceholder),
+		[]byte(cfg.verificationDashboardUID),
+	)
 	// The embedded FS doesn't carry meaningful mtimes; pretend the file was
 	// stamped at process start so ServeContent's If-Modified-Since logic is
 	// well-defined.

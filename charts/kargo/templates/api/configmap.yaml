@@ -19,6 +19,12 @@ data:
   {{- if .Values.api.basePath }}
   API_BASE_PATH: {{ quote .Values.api.basePath }}
   {{- end }}
+  {{- if .Values.api.grafana.url }}
+  GRAFANA_URL: {{ quote .Values.api.grafana.url }}
+  GRAFANA_LOKI_DATASOURCE_UID: {{ quote .Values.api.grafana.lokiDatasourceUid }}
+  GRAFANA_VERIFICATION_CLUSTER: {{ quote .Values.api.grafana.verificationCluster }}
+  GRAFANA_VERIFICATION_DASHBOARD_UID: {{ quote .Values.api.grafana.verificationDashboardUid }}
+  {{- end }}
   {{- if $kc }}
   KUBECONFIG: /etc/kargo/kubeconfig.yaml
   {{- end }}
