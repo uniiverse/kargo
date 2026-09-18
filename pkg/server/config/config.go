@@ -51,6 +51,7 @@ type ServerConfig struct {
 	// controller is often unnamed, so an empty string is a valid value.
 	DefaultControllerName string
 	ProjectLabelPrefixes  []string
+	GrafanaConfig         GrafanaConfig
 	RestConfig            *rest.Config
 
 	// AdditionalHandlers is a map of path patterns to HTTP handlers that will
@@ -63,6 +64,28 @@ type ServerConfig struct {
 	// dashboard handler. The filesystem should contain the built UI assets at
 	// its root (i.e., index.html should be at the top level).
 	DashboardFS fs.FS
+}
+
+// GrafanaConfig holds settings for optional Grafana deep-links surfaced in
+// the UI's AnalysisRun logs view (see ui/src/config/grafana.ts). Every field
+// defaults to empty; when URL is empty the UI hides the deep-links entirely
+// rather than emitting broken links. Values are relayed to the browser via
+// window globals injected into index.html at serve time, the same mechanism
+// used for ServerConfig.BasePath — see indexHTMLGrafanaURLPlaceholder and
+// friends in server.go.
+type GrafanaConfig struct {
+	// URL is the Grafana base URL, no trailing slash (e.g.
+	// https://grafana.example.com).
+	URL string `envconfig:"GRAFANA_URL"`
+	// LokiDatasourceUID is the UID of the Loki datasource that backs the
+	// verification-log dashboard and Explore deep-links.
+	LokiDatasourceUID string `envconfig:"GRAFANA_LOKI_DATASOURCE_UID"`
+	// VerificationCluster is the value of the Loki `cluster` stream label
+	// identifying the cluster where AnalysisRun verification jobs run.
+	VerificationCluster string `envconfig:"GRAFANA_VERIFICATION_CLUSTER"`
+	// VerificationDashboardUID is the UID of a provisioned Grafana dashboard
+	// used for the "Open in Grafana" deep-link.
+	VerificationDashboardUID string `envconfig:"GRAFANA_VERIFICATION_DASHBOARD_UID"`
 }
 
 func ServerConfigFromEnv() ServerConfig {
@@ -119,7 +142,17 @@ func ServerConfigFromEnv() ServerConfig {
 	cfg.ProjectLabelPrefixes = parseProjectLabelPrefixes(
 		os.GetEnv("PROJECT_LABEL_PREFIXES", "universe.engineer/"),
 	)
+	envconfig.MustProcess("", &cfg.GrafanaConfig)
+	cfg.GrafanaConfig.URL = normalizeGrafanaURL(cfg.GrafanaConfig.URL)
 	return cfg
+}
+
+// normalizeGrafanaURL strips a trailing slash from an operator-supplied
+// Grafana URL so callers can build deep-links by simple concatenation (e.g.
+// url+"/d/"+dashboardUID) without producing a double slash. Empty stays
+// empty.
+func normalizeGrafanaURL(u string) string {
+	return strings.TrimRight(strings.TrimSpace(u), "/")
 }
 
 // NormalizeBasePath canonicalizes an operator-supplied basePath: empty stays

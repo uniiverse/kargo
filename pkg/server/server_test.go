@@ -179,7 +179,13 @@ func TestRenderIndexHTML(t *testing.T) {
 <html>
 <head>
   <base href="__BASE_HREF__">
-  <script>window.__KARGO_BASE_PATH__ = "__BASE_PATH__";</script>
+  <script>
+    window.__KARGO_BASE_PATH__ = "__BASE_PATH__";
+    window.__KARGO_GRAFANA_URL__ = "__GRAFANA_URL__";
+    window.__KARGO_LOKI_DATASOURCE_UID__ = "__LOKI_DATASOURCE_UID__";
+    window.__KARGO_VERIFICATION_CLUSTER__ = "__VERIFICATION_CLUSTER__";
+    window.__KARGO_VERIFICATION_DASHBOARD_UID__ = "__VERIFICATION_DASHBOARD_UID__";
+  </script>
   <link rel="icon" href="favicon.png">
 </head>
 <body><div id="root"></div></body>
@@ -187,16 +193,16 @@ func TestRenderIndexHTML(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		basePath      string
+		cfg           dashboardHTMLConfig
 		indexContents string
 		fileName      string
 		wantBaseHref  string
 		wantBasePath  string
+		wantGrafana   string
 		wantBodyEmpty bool
 	}{
 		{
 			name:          "empty basePath substitutes root href and empty global",
-			basePath:      "",
 			indexContents: indexBody,
 			fileName:      "index.html",
 			wantBaseHref:  `<base href="/">`,
@@ -204,7 +210,7 @@ func TestRenderIndexHTML(t *testing.T) {
 		},
 		{
 			name:          "non-empty basePath substitutes prefix",
-			basePath:      "/kargo",
+			cfg:           dashboardHTMLConfig{basePath: "/kargo"},
 			indexContents: indexBody,
 			fileName:      "index.html",
 			wantBaseHref:  `<base href="/kargo/">`,
@@ -212,15 +218,40 @@ func TestRenderIndexHTML(t *testing.T) {
 		},
 		{
 			name:          "multi-segment basePath",
-			basePath:      "/teams/kargo",
+			cfg:           dashboardHTMLConfig{basePath: "/teams/kargo"},
 			indexContents: indexBody,
 			fileName:      "index.html",
 			wantBaseHref:  `<base href="/teams/kargo/">`,
 			wantBasePath:  `window.__KARGO_BASE_PATH__ = "/teams/kargo";`,
 		},
 		{
+			name:          "unconfigured Grafana settings substitute to empty strings",
+			cfg:           dashboardHTMLConfig{},
+			indexContents: indexBody,
+			fileName:      "index.html",
+			wantGrafana: `window.__KARGO_GRAFANA_URL__ = "";
+    window.__KARGO_LOKI_DATASOURCE_UID__ = "";
+    window.__KARGO_VERIFICATION_CLUSTER__ = "";
+    window.__KARGO_VERIFICATION_DASHBOARD_UID__ = "";`,
+		},
+		{
+			name: "configured Grafana settings are substituted in",
+			cfg: dashboardHTMLConfig{
+				grafanaURL:               "https://grafana.example.com",
+				lokiDatasourceUID:        "loki-uid",
+				verificationCluster:      "cluster-1",
+				verificationDashboardUID: "dashboard-uid",
+			},
+			indexContents: indexBody,
+			fileName:      "index.html",
+			wantGrafana: `window.__KARGO_GRAFANA_URL__ = "https://grafana.example.com";
+    window.__KARGO_LOKI_DATASOURCE_UID__ = "loki-uid";
+    window.__KARGO_VERIFICATION_CLUSTER__ = "cluster-1";
+    window.__KARGO_VERIFICATION_DASHBOARD_UID__ = "dashboard-uid";`,
+		},
+		{
 			name:          "html without placeholders is served unchanged",
-			basePath:      "/kargo",
+			cfg:           dashboardHTMLConfig{basePath: "/kargo"},
 			indexContents: `<html><body>no placeholders</body></html>`,
 			fileName:      "index.html",
 			wantBaseHref:  "",
@@ -228,7 +259,7 @@ func TestRenderIndexHTML(t *testing.T) {
 		},
 		{
 			name:          "missing file returns empty body",
-			basePath:      "/kargo",
+			cfg:           dashboardHTMLConfig{basePath: "/kargo"},
 			indexContents: indexBody,
 			fileName:      "does-not-exist.html",
 			wantBodyEmpty: true,
@@ -239,7 +270,7 @@ func TestRenderIndexHTML(t *testing.T) {
 			fsys := fstest.MapFS{
 				"index.html": &fstest.MapFile{Data: []byte(tc.indexContents)},
 			}
-			body, ts := renderIndexHTML(fsys, tc.fileName, tc.basePath)
+			body, ts := renderIndexHTML(fsys, tc.fileName, tc.cfg)
 			if tc.wantBodyEmpty {
 				require.Empty(t, body)
 				require.True(t, ts.IsZero())
@@ -251,11 +282,22 @@ func TestRenderIndexHTML(t *testing.T) {
 				"placeholder __BASE_HREF__ should have been substituted")
 			require.NotContains(t, rendered, indexHTMLBasePathPlaceholder,
 				"placeholder __BASE_PATH__ should have been substituted")
+			require.NotContains(t, rendered, indexHTMLGrafanaURLPlaceholder,
+				"placeholder __GRAFANA_URL__ should have been substituted")
+			require.NotContains(t, rendered, indexHTMLLokiDatasourceUIDPlaceholder,
+				"placeholder __LOKI_DATASOURCE_UID__ should have been substituted")
+			require.NotContains(t, rendered, indexHTMLVerificationClusterPlaceholder,
+				"placeholder __VERIFICATION_CLUSTER__ should have been substituted")
+			require.NotContains(t, rendered, indexHTMLVerificationDashboardUIDPlaceholder,
+				"placeholder __VERIFICATION_DASHBOARD_UID__ should have been substituted")
 			if tc.wantBaseHref != "" {
 				require.Contains(t, rendered, tc.wantBaseHref)
 			}
 			if tc.wantBasePath != "" {
 				require.Contains(t, rendered, tc.wantBasePath)
+			}
+			if tc.wantGrafana != "" {
+				require.Contains(t, rendered, tc.wantGrafana)
 			}
 		})
 	}

@@ -128,3 +128,26 @@ func TestNormalizeBasePath(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeGrafanaURL(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: ""},
+		{name: "whitespace only", input: "  ", expected: ""},
+		{name: "already canonical", input: "https://grafana.example.com", expected: "https://grafana.example.com"},
+		{name: "trailing slash", input: "https://grafana.example.com/", expected: "https://grafana.example.com"},
+		{
+			name:     "leading and trailing whitespace",
+			input:    "  https://grafana.example.com  ",
+			expected: "https://grafana.example.com",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, normalizeGrafanaURL(tc.input))
+		})
+	}
+}
