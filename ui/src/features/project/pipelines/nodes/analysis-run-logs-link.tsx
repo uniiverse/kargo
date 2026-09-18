@@ -24,16 +24,26 @@ export const AnalysisRunLogsLink = (props: AnalysisRunLogsLinkProps) => {
 
   const recentVerification = props.stage?.status?.freightHistory?.[0]?.verificationHistory?.[0];
 
-  const recentVerificationFailed = recentVerification?.phase === 'Failed';
+  // Show the link for any completed verification that produced an AnalysisRun —
+  // on-call reads green-run logs too, not just failures. The "not currently
+  // Promoting" guard above already hides it mid-promotion.
+  const analysisRunName = recentVerification?.analysisRun?.name;
+  // All terminal AnalysisRun phases — on-call reads logs for errored and
+  // inconclusive runs too, not just clean pass/fail.
+  const completed =
+    recentVerification?.phase === 'Successful' ||
+    recentVerification?.phase === 'Failed' ||
+    recentVerification?.phase === 'Inconclusive' ||
+    recentVerification?.phase === 'Error';
 
-  if (!recentVerificationFailed) {
+  if (!completed || !analysisRunName) {
     return null;
   }
 
   const logsLink = generatePath(paths.analysisRunLogs, {
     name: props.stage?.metadata?.namespace,
     stageName: props.stage?.metadata?.name,
-    analysisRunId: recentVerification?.analysisRun?.name
+    analysisRunId: analysisRunName
   });
 
   return (
