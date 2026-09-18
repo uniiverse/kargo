@@ -47,16 +47,23 @@ export default defineConfig({
   },
   plugins: [
     // In dev mode the API server isn't in front to substitute the
-    // basePath placeholders in index.html, so do the substitution here
-    // with empty-basePath values to keep dev-server HTML well-formed.
-    // Build mode skips this hook so the placeholders survive into the
-    // built artifact for the API server to substitute at serve time.
+    // index.html placeholders, so do the substitution here — basePath from
+    // KARGO_BASE_PATH, and the Grafana deep-link config left empty (no
+    // local dev server has a Grafana instance to point at). Build mode
+    // skips this hook so the placeholders survive into the built artifact
+    // for the API server to substitute at serve time.
     {
-      name: 'kargo-basepath-dev-substitute',
+      name: 'kargo-placeholder-dev-substitute',
       apply: 'serve',
       transformIndexHtml(html: string) {
         const baseHref = KARGO_BASE_PATH ? `${KARGO_BASE_PATH}/` : '/';
-        return html.replace(/__BASE_HREF__/g, baseHref).replace(/__BASE_PATH__/g, KARGO_BASE_PATH);
+        return html
+          .replace(/__BASE_HREF__/g, baseHref)
+          .replace(/__BASE_PATH__/g, KARGO_BASE_PATH)
+          .replace(/__GRAFANA_URL__/g, '')
+          .replace(/__LOKI_DATASOURCE_UID__/g, '')
+          .replace(/__VERIFICATION_CLUSTER__/g, '')
+          .replace(/__VERIFICATION_DASHBOARD_UID__/g, '');
       }
     },
     viteCompression(),
