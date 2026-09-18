@@ -11,6 +11,7 @@ import { paths } from '@ui/config/paths';
 import { RolloutsAnalysisRun } from '@ui/gen/api/v2/models';
 
 import { extractFilters } from './extract-analysis-run';
+import { buildDashboardUrl, buildExploreUrl } from './grafana-links';
 import {
   monacoEditorLogLanguage,
   monacoEditorLogLanguageTheme,
@@ -77,6 +78,9 @@ export const AnalysisRunLogs = (props: {
   const project = props.analysisRun?.metadata?.namespace;
   const analysisRunId = props.analysisRun?.metadata?.name;
   const stage = props.analysisRun?.metadata?.labels?.['kargo.akuity.io/stage'];
+
+  const dashboardUrl = buildDashboardUrl(props.analysisRun, filters.selectedJob);
+  const exploreUrl = buildExploreUrl(props.analysisRun, filters.selectedJob);
 
   const validSelection = filterableItems?.containerNames?.[filters.selectedJob]?.includes(
     filters.selectedContainer
@@ -154,18 +158,31 @@ export const AnalysisRunLogs = (props: {
             Line numbers
           </Checkbox>
         </div>
-        {props.linkFullScreen && (
-          <Link
-            to={`${generatePath(paths.analysisRunLogs, {
-              name: project,
-              stageName: stage,
-              analysisRunId: analysisRunId
-            })}?job=${filters.selectedJob}&container=${filters.selectedContainer}&search=${search}`}
-            className='ml-auto'
-            target='_blank'
-          >
-            <FontAwesomeIcon icon={faExternalLink} /> Full Screen
-          </Link>
+        {(dashboardUrl || exploreUrl || props.linkFullScreen) && (
+          <div className='ml-auto space-x-5'>
+            {dashboardUrl && (
+              <a href={dashboardUrl} target='_blank' rel='noreferrer'>
+                <FontAwesomeIcon icon={faExternalLink} /> Open in Grafana
+              </a>
+            )}
+            {exploreUrl && (
+              <a href={exploreUrl} target='_blank' rel='noreferrer'>
+                <FontAwesomeIcon icon={faExternalLink} /> Explore logs
+              </a>
+            )}
+            {props.linkFullScreen && (
+              <Link
+                to={`${generatePath(paths.analysisRunLogs, {
+                  name: project,
+                  stageName: stage,
+                  analysisRunId: analysisRunId
+                })}?job=${filters.selectedJob}&container=${filters.selectedContainer}&search=${search}`}
+                target='_blank'
+              >
+                <FontAwesomeIcon icon={faExternalLink} /> Full Screen
+              </Link>
+            )}
+          </div>
         )}
       </div>
       {!logsLoading && logs && (
