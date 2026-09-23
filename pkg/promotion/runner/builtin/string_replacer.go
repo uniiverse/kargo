@@ -168,8 +168,8 @@ func splitYAMLDocuments(data []byte) [][]byte {
 			}
 			continue
 		}
-		current.WriteString(line)
-		current.WriteByte('\n')
+		_, _ = current.WriteString(line)
+		_ = current.WriteByte('\n')
 	}
 	if current.Len() > 0 {
 		trimmed := bytes.TrimSpace(current.Bytes())
