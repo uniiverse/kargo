@@ -6,16 +6,20 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	libClient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	kargoapi "github.com/akuity/kargo/api/v1alpha1"
 	"github.com/akuity/kargo/pkg/server/user"
 )
 
@@ -26,6 +30,33 @@ func TestSetOptionsDefaults(t *testing.T) {
 	// cluster on the default path and only calls this hook when a test sets it.
 	require.Nil(t, opts.NewInternalClient)
 	require.NotNil(t, opts.Scheme)
+}
+
+func TestNewCacheOptions(t *testing.T) {
+	const testKargoNamespace = "kargo"
+	opts := newCacheOptions(testKargoNamespace)
+	var lease, event *cache.ByObject
+	for obj, byObj := range opts.ByObject {
+		switch obj.(type) {
+		case *coordinationv1.Lease:
+			lease = &byObj
+		case *corev1.Event:
+			event = &byObj
+		}
+	}
+
+	require.NotNil(t, lease)
+	require.Len(t, lease.Namespaces, 1)
+	require.Contains(t, lease.Namespaces, testKargoNamespace)
+
+	require.NotNil(t, event)
+	require.NotNil(t, event.Field)
+	require.True(t, event.Field.Matches(fields.Set{
+		"involvedObject.apiVersion": kargoapi.GroupVersion.String(),
+	}))
+	require.False(t, event.Field.Matches(fields.Set{
+		"involvedObject.apiVersion": "apps/v1",
+	}))
 }
 
 func TestNewClient(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -242,6 +243,34 @@ func NewClient(
 	return c, nil
 }
 
+// newCacheOptions returns the cache options for the API server's internal
+// cluster.
+func newCacheOptions(kargoNamespace string) cache.Options {
+	return cache.Options{
+		ByObject: map[libClient.Object]cache.ByObject{
+			// The API server has only namespaced (Role-based) RBAC for
+			// Leases, so the default cluster-wide watch the cache would
+			// otherwise set up fails to start. Scope the lease informer to
+			// the Kargo namespace, where the API server's RBAC actually
+			// permits list/watch.
+			&coordinationv1.Lease{}: {
+				Namespaces: map[string]cache.Config{
+					kargoNamespace: {},
+				},
+			},
+			// The API server only serves Events about Kargo objects.
+			// Without this, the cache holds every Event in the cluster,
+			// and a flood elsewhere stops the API server from starting.
+			&corev1.Event{}: {
+				Field: fields.OneTermEqualSelector(
+					"involvedObject.apiVersion",
+					kargoapi.GroupVersion.String(),
+				),
+			},
+		},
+	}
+}
+
 func newDefaultCluster(
 	ctx context.Context,
 	restCfg *rest.Config,
@@ -259,20 +288,7 @@ func newDefaultCluster(
 					},
 				},
 			}
-			// The API server has only namespaced (Role-based) RBAC for
-			// Leases, so the default cluster-wide watch the cache would
-			// otherwise set up fails to start. Scope the lease informer to
-			// the Kargo namespace, where the API server's RBAC actually
-			// permits list/watch.
-			clusterOptions.Cache = cache.Options{
-				ByObject: map[libClient.Object]cache.ByObject{
-					&coordinationv1.Lease{}: {
-						Namespaces: map[string]cache.Config{
-							kargoNamespace: {},
-						},
-					},
-				},
-			}
+			clusterOptions.Cache = newCacheOptions(kargoNamespace)
 			clusterOptions.NewClient = func(
 				cfg *rest.Config,
 				opts libClient.Options,
