@@ -10,7 +10,7 @@ This repository is **uniiverse/kargo**, a fork of upstream **akuity/kargo**
 | Branch | Role |
 |--------|------|
 | `main` | Pristine mirror of `upstream/main`. **Fast-forward only — never commit custom work here.** Keeps a clean diff against upstream. |
-| `universe` | Integration branch holding all custom changes. Based on the latest upstream **release tag** (started at `v1.10.7`), not `upstream/main`. |
+| `universe` | Integration branch holding all custom changes. Based on the latest upstream **release tag** (started at `v1.10.7`), not `upstream/main`. Last synced: **`v1.12.4`**. |
 | `feat/*` | Short-lived branches off `universe` for individual changes. |
 
 ## Syncing with upstream
@@ -28,6 +28,8 @@ This repository is **uniiverse/kargo**, a fork of upstream **akuity/kargo**
   land in upstream via different SHAs and collide on every subsequent sync. Wait
   for the release that includes a fix; if urgently needed, cherry-pick it but
   drop it at the next release bump.
-- Custom value-add currently carried: the `string-replacer` promotion step
-  (on `universe`). The project-labels UI feature and "watch recovery when k8s
+- Custom value-add currently carried (on `universe`): the `string-replacer`
+  promotion step, the `kustomize-build` alpha plugin support, the
+  `/freightFor/:shortSha` UI redirect, and the Events cache scope fix.
+  The project-labels UI feature and "watch recovery when k8s
   API disconnects" are parked on `feat/project-labels-ui` for later re-landing.
